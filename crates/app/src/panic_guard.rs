@@ -14,11 +14,6 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::core::PCWSTR;
-use windows::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MB_TOPMOST,
-};
-
 static DIALOG_SHOWN: AtomicBool = AtomicBool::new(false);
 
 /// Install the process-wide panic hook (call once, early in `main`).
@@ -54,24 +49,14 @@ fn notify_once() {
     if DIALOG_SHOWN.swap(true, Ordering::SeqCst) {
         return;
     }
-    let dir = crate::logging::logs_dir_display();
-    let text: Vec<u16> = format!(
+    crate::notify::error(
         "RustShot hit an internal error and recovered, but may not work correctly until it is \
-         restarted.\n\nDetails were written to:\n{dir}"
-    )
-    .encode_utf16()
-    .chain([0])
-    .collect();
-    let title: Vec<u16> = "RustShot".encode_utf16().chain([0]).collect();
-    // SAFETY: a plain, unowned, top-most message box; both strings are NUL-terminated.
-    unsafe {
-        MessageBoxW(
-            None,
-            PCWSTR(text.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST,
-        );
-    }
+         restarted.",
+        format!(
+            "Details were written to:\n{}",
+            crate::logging::logs_dir_display()
+        ),
+    );
 }
 
 #[cfg(test)]

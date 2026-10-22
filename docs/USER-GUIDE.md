@@ -145,7 +145,20 @@ from a newer build still loads in an older one.
 
 ## Troubleshooting
 
-- **A hotkey does nothing:** another app owns it (see the note above). Rebind it in `config.toml`.
+- **A hotkey does nothing:** another app owns it (see the note above). The tray tooltip says how
+  many hotkeys are unavailable; rebind them in **Settings…** (it tells you if the new key is
+  taken too) or in `config.toml`.
+- **"The settings file could not be read" at startup:** `config.toml` was not valid TOML (usually
+  a hand-edit typo). RustShot moved it to `config.toml.broken-<number>` next to the original,
+  wrote a fresh default file, and started with default settings and hotkeys. Copy what you need
+  from the `.broken` file back into Settings, then delete it. A single misspelt shortcut does
+  not cause this: that shortcut simply ends up unbound.
+- **"The configured output folder is not usable":** the folder in Settings could not be created
+  (missing drive, no permission). Captures go to `Pictures\RustShot` until you choose another
+  folder. A folder must be a full path such as `D:\Shots`; a relative name is reset to the
+  default.
+- **Something failed:** RustShot shows a dialog for any screenshot, recording, clipboard, delete
+  or settings operation that did not complete, with the reason; the log has the details.
 - **A capture is all black:** the target is DRM-protected (e.g. some video players); RustShot
   warns and still saves what it captured.
 - **No audio in a recording:** check the microphone/system-audio toggles; if the chosen device

@@ -10,6 +10,17 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] `rustshot dev config` prints the loaded config and the config file path.
 - [ ] First run creates `%APPDATA%\RustShot\config.toml` and the output folder.
 - [ ] Logs appear under `%APPDATA%\RustShot\logs`.
+- [x] Corrupt `config.toml` → app still starts: the file is renamed `config.toml.broken-<n>`
+      (contents intact), a fresh default `config.toml` is written, and a startup dialog names
+      both files and the parse error. *(Verified on the release build launched from `System32`
+      as the Run key would; screenshot of the dialog taken.)*
+- [x] `output_folder = "shots"` (relative) → silently reset to the default and persisted, no
+      dialog; `output_folder = 'Z:\nope\shots'` (missing drive) → dialog "not usable", captures
+      fall back to `Pictures\RustShot`, config left as typed. *(Verified the same way.)*
+- [ ] Tray tooltip reads "RustShot — N hotkey(s) unavailable" when another app holds some keys
+      (code path exercised; the tooltip text itself was not read back).
+- [ ] Settings → OK with a relative folder, or a folder on a missing drive, keeps the dialog
+      open with a message; OK with a hotkey another app holds shows a dialog naming it.
 
 ## M1 — Capture engine (stills)
 - [ ] `rustshot dev list-monitors` lists every display with correct bounds + DPI/scale.

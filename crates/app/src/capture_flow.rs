@@ -85,7 +85,9 @@ pub fn execute_pending() {
             dispatch::with_app(|app| app.flyout = Some(flyout));
         }
         Ok(None) => tracing::info!("capture cancelled"),
-        Err(e) => tracing::error!("capture failed: {e:#}"),
+        // Notify *before* releasing the gate: the box pumps messages, and a hotkey pressed
+        // while it is up must not start a second capture nested inside it.
+        Err(e) => crate::notify::error("Screenshot failed.", e),
     }
     clear_busy();
 }
@@ -142,7 +144,12 @@ fn run_capture(
 
     if settings.screenshot.copy_to_clipboard {
         if let Err(e) = crate::clipboard::copy_image(&img) {
-            tracing::warn!("could not copy screenshot to clipboard: {e:#}");
+            // The file is saved; only the clipboard half failed (typically another app holding
+            // the clipboard open). The gate is still held here.
+            crate::notify::warn(
+                "The screenshot was saved but could not be copied to the clipboard.",
+                e,
+            );
         }
     }
 

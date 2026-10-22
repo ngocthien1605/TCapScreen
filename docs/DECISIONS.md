@@ -20,6 +20,26 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   hook also writes every panic synchronously to `logs/panic.log`, since the normal file logger
   is asynchronous and may never flush before an abort. Release keeps line tables in the `.pdb`
   (`debug = "line-tables-only"`) so those locations are symbolizable.
+- **Failures are surfaced, not just logged** (`app/src/notify.rs`). Any failure the user
+  triggered or would otherwise never learn about — a screenshot or recording that did not
+  happen, a clipboard copy or delete that failed, settings that did not save, hotkeys Windows
+  refused — goes through `notify::{error,warn,notice,fatal}` as well as `tracing`. The seam is
+  a plain top-most message box today: `tray-icon` 0.26 has no balloon API, and a custom toast is
+  more than the seam needs; the API makes no modality promise so a toast can replace it later
+  without touching call sites. Rule for callers on the UI thread: notify *before* releasing the
+  `busy` gate, because the box pumps messages and a hotkey pressed meanwhile would otherwise
+  start a capture nested inside it. Exception: hotkeys another app already holds are reported at
+  startup only in the tray tooltip + log (a permanent condition on that machine should not pop a
+  dialog on every login); Settings → OK reports them in a dialog because the user just chose them.
+- **A broken `config.toml` never blocks startup** (`Settings::load_or_recover`). A file that is
+  not valid TOML is renamed to `config.toml.broken-<unix-secs>` (so hand-written hotkeys can be
+  recovered), defaults take over, a fresh file is written, and a startup dialog names both
+  files; an *unreadable* file (I/O error) is left alone and defaults apply for the session only.
+  Within a valid file, a shortcut string that does not parse deserializes as *unbound* instead of
+  rejecting the whole file (trade-off: a typo shows up as a dead key, not an error; the log
+  names it). A *relative* output folder is reset to the default by `sanitize()` — it would
+  resolve against `System32` when launched from the `Run` key — and the Settings dialog refuses
+  one on OK; an absolute folder that cannot be created falls back to the default with a dialog.
 - **Edition 2021** (not 2024): the prompt allows either; 2021 is the broadly-stable choice and
   nothing here needs 2024-only features. Revisit if a dependency requires 2024.
 

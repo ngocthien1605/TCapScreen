@@ -175,10 +175,14 @@ impl Serialize for Hotkey {
     }
 }
 
+/// Lenient on purpose: a shortcut string that does not parse (`"A+B"`, `"Ctrl+"`) deserializes
+/// as *unbound* instead of failing the whole settings file. The trade-off is that a typo in one
+/// line shows up as a dead key rather than an error; the alternative — rejecting the file —
+/// would discard every other setting too. The app logs the unbound keys it finds.
 impl<'de> Deserialize<'de> for Hotkey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Hotkey::from_str(&s).map_err(serde::de::Error::custom)
+        Ok(Hotkey::from_str(&s).unwrap_or_else(|_| Hotkey::new(vec![], "")))
     }
 }
 
@@ -319,6 +323,18 @@ mod tests {
         let t = toml::to_string(&W { h }).unwrap();
         // t is: h = "Ctrl+PrintScreen"\n
         t.trim().trim_start_matches("h = ").to_string()
+    }
+
+    #[test]
+    fn unparseable_string_deserializes_as_unbound() {
+        #[derive(Deserialize)]
+        struct W {
+            h: Hotkey,
+        }
+        let w: W = toml::from_str("h = \"A+B\"").unwrap();
+        assert!(w.h.is_empty());
+        let w: W = toml::from_str("h = \"Ctrl+Shift+R\"").unwrap();
+        assert_eq!(w.h.to_string(), "Ctrl+Shift+R");
     }
 
     #[test]

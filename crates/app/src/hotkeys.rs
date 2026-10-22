@@ -90,6 +90,41 @@ fn route_for(id: u32) -> Option<Action> {
 /// Owns the registered hotkeys. Kept alive for the whole run (dropping it unregisters them).
 pub struct Hotkeys {
     _manager: GlobalHotKeyManager,
+    /// Bound hotkeys Windows refused to register (`"Region screenshot (PrintScreen)"`), in
+    /// binding order. Empty when everything the user asked for is live.
+    pub unregistered: Vec<String>,
+}
+
+impl Hotkeys {
+    /// Tray tooltip summarising the hotkey state.
+    pub fn tooltip(&self) -> String {
+        match self.unregistered.len() {
+            0 => "RustShot — idle".to_string(),
+            n => format!("RustShot — {n} hotkey(s) unavailable (in use by another app)"),
+        }
+    }
+
+    /// A user-facing report of the hotkeys that could not be registered, or `None` if all are.
+    pub fn unregistered_report(&self) -> Option<String> {
+        if self.unregistered.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{}\n\nAnother app or Windows itself (for example Snipping Tool's PrintScreen \
+             setting) is already using them. Choose different keys in Settings or free them \
+             in the other app.",
+            self.unregistered.join("\n")
+        ))
+    }
+}
+
+/// Human label for a binding name (`region_screenshot` → `Region screenshot`).
+fn label(name: &str) -> String {
+    let mut s = name.replace('_', " ");
+    if let Some(first) = s.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    s
 }
 
 /// Register all bound, non-conflicting hotkeys and install an event handler that posts the
@@ -138,14 +173,22 @@ pub fn register(map: &HotkeyMap, dispatch_hwnd: HWND) -> Option<Hotkeys> {
     ];
 
     let mut routes = BTreeMap::new();
+    let mut unregistered = Vec::new();
     for (name, hk, action) in bindings {
         if conflicting.contains(name) {
             tracing::warn!("hotkey '{name}' ({hk}) skipped: conflicts with another binding");
+            unregistered.push(format!(
+                "{} ({hk}) — duplicate of another shortcut",
+                label(name)
+            ));
             continue;
         }
         let Some(ghk) = to_hotkey(hk) else {
-            if !hk.is_empty() {
+            if hk.is_empty() {
+                tracing::info!("hotkey '{name}' is unbound");
+            } else {
                 tracing::warn!("hotkey '{name}' ({hk}) could not be mapped; skipping");
+                unregistered.push(format!("{} ({hk}) — unknown key name", label(name)));
             }
             continue;
         };
@@ -159,6 +202,7 @@ pub fn register(map: &HotkeyMap, dispatch_hwnd: HWND) -> Option<Hotkeys> {
                     "could not register hotkey '{name}' ({hk}): {e}; \
                      it may be claimed by another app or Windows"
                 );
+                unregistered.push(format!("{} ({hk})", label(name)));
             }
         }
     }
@@ -186,7 +230,10 @@ pub fn register(map: &HotkeyMap, dispatch_hwnd: HWND) -> Option<Hotkeys> {
         }));
     });
 
-    Some(Hotkeys { _manager: manager })
+    Some(Hotkeys {
+        _manager: manager,
+        unregistered,
+    })
 }
 
 #[cfg(test)]
@@ -247,6 +294,12 @@ mod tests {
             "new binding must route"
         );
         assert_eq!(route_for(900_001), None, "old binding must be gone");
+    }
+
+    #[test]
+    fn labels_and_reports_read_well() {
+        assert_eq!(label("region_screenshot"), "Region screenshot");
+        assert_eq!(label("stop_recording"), "Stop recording");
     }
 
     #[test]

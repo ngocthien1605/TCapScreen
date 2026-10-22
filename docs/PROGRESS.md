@@ -193,6 +193,16 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Review item (2) — config recovery + error surfacing. `Settings::load_or_recover`
+  quarantines unparseable config (`config.toml.broken-<n>`), lenient hotkey deserialize
+  (bad string → unbound), `sanitize()` resets a relative output folder, Settings OK validates
+  the folder (absolute + creatable), startup/apply fall back to the default folder when the
+  configured one cannot be created. New `notify` module (message box + log) now used for
+  capture/recording/clipboard/delete/settings/hotkey failures; the panic dialog goes through
+  it too. Hotkeys Windows refused are listed in the tray tooltip at startup and in a dialog on
+  Settings OK. Live on the release build: garbage config → dialog + `.broken-` file + fresh
+  defaults; relative folder → reset silently; `Z:\nope\shots` → "not usable" dialog with the
+  `Pictures\RustShot` fallback. Gate green: fmt/clippy/deny, **129 tests**.
 - 2026-10-22: M2 hardening (post-review). Fixed: (1) flyout/OpenFolder shell+clipboard work now
   runs *outside* the `AppState` borrow (ShellExecuteW can pump messages and re-enter dispatch —
   would have been a `BorrowMutError` panic in a wndproc); (2) overlay nested loop now destroys

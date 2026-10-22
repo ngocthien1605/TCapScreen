@@ -36,6 +36,71 @@ pub enum ConfigError {
     NoBaseDir,
 }
 
+/// What [`Settings::load_or_recover`] had to do when the config file could not be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recovery {
+    /// The file was not valid TOML. It was renamed to `config.toml.broken-<unix-secs>` (so a
+    /// hand-edited hotkey table can still be recovered) and defaults are in effect.
+    Quarantined {
+        /// The config file that failed to parse.
+        from: PathBuf,
+        /// Where it was moved, or why the rename itself failed (the file is then still in place).
+        moved: Result<PathBuf, String>,
+        /// The parser's message.
+        reason: String,
+    },
+    /// The file exists but could not be read; it was left alone and defaults are in effect.
+    Unreadable { reason: String },
+}
+
+impl Recovery {
+    /// A user-facing description (multi-line) of what happened and what to do.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Quarantined {
+                from,
+                moved,
+                reason,
+            } => {
+                let mut m = format!(
+                    "The settings file could not be read, so RustShot is using its default \
+                     settings and hotkeys.\n\n{}\n\n{reason}\n\n",
+                    from.display()
+                );
+                match moved {
+                    Ok(to) => m.push_str(&format!(
+                        "The unreadable file was kept as:\n{}\n\nA fresh settings file has \
+                         been written; use Settings to set your preferences again.",
+                        to.display()
+                    )),
+                    Err(e) => m.push_str(&format!(
+                        "The file could not be moved aside ({e}), so it will be reported again \
+                         on the next start; fix or delete it to stop this message."
+                    )),
+                }
+                m
+            }
+            Self::Unreadable { reason } => format!(
+                "The settings file could not be read, so RustShot is using its default settings \
+                 and hotkeys for this session. Nothing has been changed on disk.\n\n{reason}"
+            ),
+        }
+    }
+}
+
+/// `config.toml` → `config.toml.broken-<unix-secs>` in the same directory.
+fn quarantine_name(path: &Path) -> PathBuf {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.toml".into());
+    path.with_file_name(format!("{name}.broken-{secs}"))
+}
+
 /// Image output format for screenshots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -164,8 +229,16 @@ impl Settings {
 
     /// Clamp/repair any out-of-range values to safe defaults. Returns `true` if anything
     /// was changed (so the caller can persist the repaired config).
+    ///
+    /// A *relative* output folder is reset to the default: it would resolve against the
+    /// process's working directory, which is `System32` when Windows launches the app from the
+    /// `Run` key.
     pub fn sanitize(&mut self) -> bool {
         let mut changed = false;
+        if !self.output_folder.as_os_str().is_empty() && !self.output_folder.is_absolute() {
+            self.output_folder = PathBuf::new();
+            changed = true;
+        }
         if !(1..=100).contains(&self.screenshot.jpeg_quality) {
             self.screenshot.jpeg_quality = 90;
             changed = true;
@@ -196,6 +269,38 @@ impl Settings {
     /// Serialize settings to a TOML string.
     pub fn to_toml(&self) -> Result<String, ConfigError> {
         Ok(toml::to_string_pretty(self)?)
+    }
+
+    /// Load settings from `path`, never failing: a file that cannot be parsed is moved aside
+    /// (see [`Recovery::Quarantined`]) and defaults are returned so the app still starts with
+    /// its built-in hotkeys; an unreadable file (permissions, I/O) also yields defaults but is
+    /// left untouched. The caller decides what to tell the user and whether to persist.
+    ///
+    /// A missing file is the normal first run and reports no recovery.
+    pub fn load_or_recover(path: &Path) -> (Self, Option<Recovery>) {
+        match Self::load_from(path) {
+            Ok(s) => (s, None),
+            Err(ConfigError::Parse { path, source }) => {
+                let to = quarantine_name(&path);
+                let moved = std::fs::rename(&path, &to)
+                    .map(|()| to)
+                    .map_err(|e| e.to_string());
+                (
+                    Self::default(),
+                    Some(Recovery::Quarantined {
+                        from: path,
+                        moved,
+                        reason: source.to_string(),
+                    }),
+                )
+            }
+            Err(e) => (
+                Self::default(),
+                Some(Recovery::Unreadable {
+                    reason: e.to_string(),
+                }),
+            ),
+        }
     }
 
     /// Load settings from `path`. If the file does not exist, returns defaults (and does not
@@ -318,6 +423,110 @@ mod tests {
         assert_eq!(s.recording.bitrate, 8_000_000);
         // Second pass is a no-op.
         assert!(!s.sanitize());
+    }
+
+    #[test]
+    fn sanitize_resets_relative_output_folder() {
+        let mut s = Settings::default();
+        s.output_folder = PathBuf::from("shots");
+        assert!(s.sanitize());
+        assert_eq!(s.output_folder, PathBuf::new());
+
+        // Drive-relative ("C:shots") is relative too; an absolute path is kept.
+        s.output_folder = PathBuf::from("C:shots");
+        assert!(s.sanitize());
+        assert_eq!(s.output_folder, PathBuf::new());
+        s.output_folder = PathBuf::from(r"C:\shots");
+        assert!(!s.sanitize());
+        assert_eq!(s.output_folder, PathBuf::from(r"C:\shots"));
+    }
+
+    #[test]
+    fn invalid_hotkey_string_unbinds_that_key_only() {
+        // Lenient: one bad shortcut must not make the whole file unreadable.
+        let toml_text =
+            "[hotkeys]\nregion_recording = \"A+B\"\nstop_recording = \"Ctrl+Shift+Q\"\n";
+        let s = Settings::from_toml(toml_text, Path::new("t.toml")).unwrap();
+        assert!(s.hotkeys.region_recording.is_empty());
+        assert_eq!(s.hotkeys.stop_recording.to_string(), "Ctrl+Shift+Q");
+        assert_eq!(
+            s.hotkeys.region_screenshot,
+            HotkeyMap::default().region_screenshot
+        );
+    }
+
+    #[test]
+    fn load_or_recover_quarantines_garbage_and_returns_defaults() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustshot_recover_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "this is = = not toml [[[").unwrap();
+
+        let (s, rec) = Settings::load_or_recover(&path);
+        assert_eq!(s, Settings::default());
+        let Some(Recovery::Quarantined { from, moved, .. }) = rec else {
+            panic!("expected Quarantined, got {rec:?}");
+        };
+        assert_eq!(from, path);
+        let to = moved.unwrap();
+        assert!(!path.exists(), "broken file must be moved away");
+        assert!(to.exists());
+        assert!(to
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("config.toml.broken-"));
+        assert_eq!(
+            std::fs::read_to_string(&to).unwrap(),
+            "this is = = not toml [[["
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_or_recover_passes_valid_and_missing_files_through() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustshot_recover_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        // Missing: first run, no recovery.
+        let (s, rec) = Settings::load_or_recover(&path);
+        assert_eq!(s, Settings::default());
+        assert_eq!(rec, None);
+        // Valid: identity, no recovery, file untouched.
+        let mut want = Settings::default();
+        want.recording.fps = 24;
+        want.save_to(&path).unwrap();
+        let (s, rec) = Settings::load_or_recover(&path);
+        assert_eq!(s, want);
+        assert_eq!(rec, None);
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recovery_messages_name_the_files() {
+        let r = Recovery::Quarantined {
+            from: PathBuf::from(r"C:\x\config.toml"),
+            moved: Ok(PathBuf::from(r"C:\x\config.toml.broken-1")),
+            reason: "bad".into(),
+        };
+        let m = r.message();
+        assert!(m.contains(r"C:\x\config.toml"));
+        assert!(m.contains("config.toml.broken-1"));
+        assert!(m.contains("bad"));
+        let r = Recovery::Unreadable {
+            reason: "denied".into(),
+        };
+        assert!(r.message().contains("denied"));
     }
 
     #[test]

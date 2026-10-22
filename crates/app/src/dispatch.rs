@@ -249,17 +249,22 @@ fn handle(action: Action) {
                 match imaging::load_rgba(&p) {
                     Ok(img) => {
                         if let Err(e) = crate::clipboard::copy_image(&img) {
-                            tracing::warn!("flyout copy failed: {e:#}");
+                            crate::notify::warn(
+                                "The image could not be copied to the clipboard.",
+                                e,
+                            );
                         }
                     }
-                    Err(e) => tracing::warn!("could not reload image for copy: {e:#}"),
+                    Err(e) => {
+                        crate::notify::warn("The screenshot could not be reopened for copying.", e)
+                    }
                 }
             }
         }
         FlyoutCopyPath => {
             if let Some(p) = flyout_path() {
                 if let Err(e) = crate::clipboard::copy_text(&p.to_string_lossy()) {
-                    tracing::warn!("flyout copy-path failed: {e:#}");
+                    crate::notify::warn("The path could not be copied to the clipboard.", e);
                 }
             }
         }
@@ -270,7 +275,9 @@ fn handle(action: Action) {
                 drop(f);
                 match std::fs::remove_file(&path) {
                     Ok(()) => tracing::info!("deleted {}", path.display()),
-                    Err(e) => tracing::warn!("could not delete {}: {e}", path.display()),
+                    Err(e) => {
+                        crate::notify::warn(&format!("Could not delete {}", path.display()), e)
+                    }
                 }
             }
         }

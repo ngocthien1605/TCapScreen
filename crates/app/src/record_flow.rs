@@ -45,7 +45,8 @@ pub fn begin(gif: bool) {
             return;
         }
         Err(e) => {
-            tracing::error!("could not select a recording target: {e:#}");
+            // Notify while the gate is still held (the box pumps messages).
+            crate::notify::error("Recording could not start.", e);
             clear_busy();
             return;
         }
@@ -125,11 +126,12 @@ pub fn execute_start() {
                 tracing::info!("recording started");
             }
             Err(e) => {
-                tracing::error!("could not show recording toolbar: {e:#}; stopping");
                 let _ = handle.stop();
+                crate::notify::error("Recording stopped: its control bar could not be shown.", e);
             }
         },
-        Err(e) => tracing::error!("could not start recording: {e:#}"),
+        // Still inside the gate reserved by `begin`, so the box cannot be re-entered by a hotkey.
+        Err(e) => crate::notify::error("Recording could not start.", e),
     }
     clear_busy();
 }
@@ -173,7 +175,10 @@ pub fn stop() {
     drop(toolbar);
     match handle.stop() {
         Ok(path) => tracing::info!("recording saved to {}", path.display()),
-        Err(e) => tracing::error!("stopping recording failed: {e:#}"),
+        // No gate is held here (the recording was tracked by `recording`, not `busy`), so a
+        // hotkey pressed while this box is up can start a new capture inside its message pump.
+        // That is harmless — the failed recording is already torn down — and accepted for now.
+        Err(e) => crate::notify::error("The recording could not be saved.", e),
     }
 }
 

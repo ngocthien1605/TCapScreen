@@ -4,7 +4,7 @@
 //! folder updated, hotkeys re-registered, run-at-startup toggled).
 
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use config::{HotkeyMap, ImageFormat, Settings};
@@ -524,24 +524,49 @@ pub fn open() {
 }
 
 fn apply(new: Settings) {
-    if let Ok(path) = config::paths::config_file() {
-        if let Err(e) = new.save_to(&path) {
-            tracing::warn!("could not save settings: {e}");
+    // Everything the user asked for is attempted; whatever did not take effect is reported
+    // right away (the user is at the dialog, so a box is the natural place) instead of being
+    // discovered later as a missing hotkey or a capture that went to the wrong folder.
+    match config::paths::config_file() {
+        Ok(path) => {
+            if let Err(e) = new.save_to(&path) {
+                crate::notify::warn(
+                    "Settings are in effect for this session but could not be saved.",
+                    e,
+                );
+            }
         }
+        Err(e) => crate::notify::warn(
+            "Settings are in effect for this session but could not be saved.",
+            e,
+        ),
     }
     let hwnd_raw = dispatch::with_app(|a| a.dispatch_hwnd.0 as isize).unwrap_or(0);
 
     // Unregister the old hotkeys first so re-registering the same keys doesn't self-conflict.
     dispatch::with_app(|a| a.hotkeys = None);
     let hk = crate::hotkeys::register(&new.hotkeys, HWND(hwnd_raw as *mut c_void));
-    if let Err(e) = crate::startup::apply(new.run_at_startup) {
-        tracing::warn!("could not apply run-at-startup: {e:#}");
+    if let Some(report) = hk.as_ref().and_then(|h| h.unregistered_report()) {
+        crate::notify::warn("Some hotkeys could not be registered.", report);
     }
-    let folder = new.effective_output_folder().ok();
+    if let Err(e) = crate::startup::apply(new.run_at_startup) {
+        crate::notify::warn("The \"run at startup\" setting could not be applied.", e);
+    }
+    let folder = match crate::usable_output_folder(&new) {
+        Ok((f, notice)) => {
+            if let Some(n) = notice {
+                crate::notify::warn("The output folder is not usable.", n);
+            }
+            Some(f)
+        }
+        Err(e) => {
+            crate::notify::warn("The output folder could not be resolved.", e);
+            None
+        }
+    };
     dispatch::with_app(|a| {
         a.settings = new;
         if let Some(f) = folder {
-            let _ = std::fs::create_dir_all(&f);
             a.output_folder = f;
         }
         a.hotkeys = hk;
@@ -847,6 +872,21 @@ fn folder_setting(text: &str, default: Option<PathBuf>) -> PathBuf {
     }
 }
 
+/// Reject a typed output folder that could never work: a relative path resolves against the
+/// process's working directory (`System32` when launched from the `Run` key). Browse can only
+/// produce absolute paths, so this guards hand-typed input. Returns the user-facing message.
+fn validate_folder(text: &str) -> Result<(), String> {
+    let text = text.trim();
+    if text.is_empty() || Path::new(text).is_absolute() {
+        Ok(())
+    } else {
+        Err(format!(
+            "The output folder must be a full path such as C:\\Users\\you\\Pictures\\RustShot, \
+             not \"{text}\"."
+        ))
+    }
+}
+
 /// Read every control into a `Settings`, validating the hotkeys. Returns a user-facing message
 /// (shown in a warning box, dialog left open) if a shortcut is unparseable or two conflict.
 fn try_gather(hwnd: HWND, initial: &Settings) -> Result<Settings, String> {
@@ -875,7 +915,18 @@ fn try_gather(hwnd: HWND, initial: &Settings) -> Result<Settings, String> {
     }
 
     let folder = get_text(hwnd, EDIT_FOLDER);
+    validate_folder(&folder)?;
     s.output_folder = folder_setting(folder.trim(), config::paths::default_output_folder().ok());
+    if !s.output_folder.as_os_str().is_empty() {
+        // Create it now so a typo in a drive letter or a read-only location is reported here,
+        // with the dialog still open, rather than on the first capture.
+        if let Err(e) = std::fs::create_dir_all(&s.output_folder) {
+            return Err(format!(
+                "The output folder could not be created:\n{}\n\n{e}",
+                s.output_folder.display()
+            ));
+        }
+    }
 
     let hk_strs: [String; 6] = std::array::from_fn(|i| get_text(hwnd, EDIT_HK_BASE + i as i32));
     s.hotkeys = strings_to_map(&hk_strs)?;
@@ -1335,6 +1386,18 @@ mod tests {
             folder_setting(r"D:\Shots", None),
             PathBuf::from(r"D:\Shots")
         );
+    }
+
+    #[test]
+    fn relative_folder_is_rejected_with_a_message() {
+        assert_eq!(validate_folder(""), Ok(()));
+        assert_eq!(validate_folder("   "), Ok(()));
+        assert_eq!(validate_folder(r"D:\Shots"), Ok(()));
+        assert_eq!(validate_folder(r"\\server\share\shots"), Ok(()));
+        let err = validate_folder("shots").unwrap_err();
+        assert!(err.contains("full path"), "{err}");
+        assert!(err.contains("\"shots\""), "{err}");
+        assert!(validate_folder("C:shots").is_err());
     }
 
     #[test]
