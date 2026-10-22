@@ -33,6 +33,7 @@ Each screenshot is saved to the output folder with an automatic name
 (`RustShot_YYYY-MM-DD_HH-mm-ss.png`), copied to the clipboard (if enabled), and shown in a small
 **flyout** in the bottom-right corner with buttons:
 
+- **Annotate** — open the screenshot in RustShot's own editor (see below); the flyout closes.
 - **Open** — open the image in the default viewer.
 - **Folder** — open Explorer with the file selected.
 - **Copy** — copy the image to the clipboard again.
@@ -40,6 +41,21 @@ Each screenshot is saved to the output folder with an automatic name
 - **Delete** — delete the file (and dismiss the flyout).
 
 The flyout auto-dismisses after a few seconds.
+
+### Annotating a screenshot
+
+Click **Annotate** in the flyout to open the screenshot in RustShot's editor. It has two tools,
+both in red, chosen from the toolbar:
+
+- **Rectangle** — drag on the image to draw a red rectangle.
+- **Text** — drag to draw a red box, then just type; **Enter** saves the text into the box.
+  `Backspace` edits while typing, `Esc` throws the text away, and clicking elsewhere also saves it.
+
+Other controls: **Undo** (`Ctrl+Z`) removes the last annotation (or cancels the one you're drawing);
+**Save** (`Ctrl+S`) writes a copy next to the original as `…_annotated.png` — your original is
+never overwritten, and saving again creates `…_annotated_2.png`; **Copy** (`Ctrl+C`) puts the
+annotated image on the clipboard. Closing the editor with unsaved annotations asks whether to
+save first. Annotations are drawn at the screenshot's full resolution, whatever the window size.
 
 ## Recording
 

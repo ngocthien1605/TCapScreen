@@ -7,6 +7,7 @@
 // to the parent console at startup so the `dev` CLI still prints (see `attach_parent_console`).
 #![windows_subsystem = "windows"]
 
+mod annotate;
 mod capture_flow;
 mod clipboard;
 mod dev;

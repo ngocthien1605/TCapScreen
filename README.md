@@ -12,8 +12,10 @@ and global hotkeys.
 
 - **Screenshots** — interactive region selection with a frozen-frame dimmed overlay and
   rubber-band, window picker with highlight, single-monitor, and all-monitors capture.
-- **Flyout** — a non-modal preview after each capture with quick actions: Open, Open Folder,
+- **Flyout** — a non-modal preview after each capture with quick actions: Annotate, Open, Open Folder,
   Copy, Copy Path, Delete.
+- **Annotate** — draw red rectangles and red text boxes on a screenshot, then save an annotated
+  copy or copy it to the clipboard.
 - **Clipboard** — copy captures straight to the clipboard as an image.
 - **Screen recording** — continuous Windows Graphics Capture → Media Foundation **H.264/MP4**,
   with constant-frame-rate pacing, pause/resume, and a recording toolbar.

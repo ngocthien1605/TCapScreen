@@ -45,6 +45,7 @@ pub enum Action {
     ExecuteRecordStart,
     RecordPauseToggle,
     RecordGif,
+    FlyoutAnnotate,
 }
 
 impl Action {
@@ -70,6 +71,7 @@ impl Action {
             17 => ExecuteRecordStart,
             18 => RecordPauseToggle,
             19 => RecordGif,
+            20 => FlyoutAnnotate,
             _ => return None,
         })
     }
@@ -245,6 +247,15 @@ fn handle(action: Action) {
                     Ok(()) => tracing::info!("deleted {}", path.display()),
                     Err(e) => tracing::warn!("could not delete {}: {e}", path.display()),
                 }
+            }
+        }
+        FlyoutAnnotate => {
+            // Close the flyout (the editor takes over), then open the editor *outside* the
+            // borrow: creating a window can pump messages and re-enter `handle`.
+            if let Some(f) = with_app(|app| app.flyout.take()).flatten() {
+                let path = f.path().to_owned();
+                drop(f);
+                crate::annotate::open(&path);
             }
         }
         FlyoutDismiss => {

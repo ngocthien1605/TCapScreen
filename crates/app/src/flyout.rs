@@ -1,5 +1,5 @@
 //! The post-capture flyout: a small, non-modal, top-most window in the bottom-right corner
-//! showing a thumbnail of the shot and five actions (Open, Folder, Copy, Path, Delete). It
+//! showing a thumbnail of the shot and six actions (Annotate, Open, Folder, Copy, Path, Delete). It
 //! auto-dismisses after a few seconds. Button clicks post [`Action`]s to the dispatch window,
 //! which calls back into the [`Flyout`] methods — keeping all state on the UI thread.
 
@@ -31,7 +31,7 @@ use crate::dispatch::{self, Action};
 const CLASS_NAME: PCWSTR = w!("RustShotFlyout");
 static REGISTER: Once = Once::new();
 
-const WIN_W: i32 = 360;
+const WIN_W: i32 = 500;
 const WIN_H: i32 = 170;
 const DISMISS_MS: u32 = 8000;
 const TIMER_ID: usize = 1;
@@ -42,6 +42,7 @@ const ID_FOLDER: usize = 102;
 const ID_COPY: usize = 103;
 const ID_PATH: usize = 104;
 const ID_DELETE: usize = 105;
+const ID_ANNOTATE: usize = 106;
 
 /// Heap-stable inner state, pointed to by the window's `GWLP_USERDATA` and owned by [`Flyout`].
 struct FlyoutInner {
@@ -201,13 +202,14 @@ fn ensure_class() -> Result<()> {
 
 fn create_buttons(parent: HWND) -> Result<()> {
     let labels = [
+        (ID_ANNOTATE, w!("Annotate")),
         (ID_OPEN, w!("Open")),
         (ID_FOLDER, w!("Folder")),
         (ID_COPY, w!("Copy")),
         (ID_PATH, w!("Path")),
         (ID_DELETE, w!("Delete")),
     ];
-    let (bw, bh, gap, x0, y) = (64i32, 28i32, 4i32, 12i32, WIN_H - 40);
+    let (bw, bh, gap, x0, y) = (76i32, 28i32, 4i32, 12i32, WIN_H - 40);
     // SAFETY: standard BUTTON child-window creation.
     unsafe {
         let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
@@ -256,6 +258,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_COMMAND => {
             let id = wparam.0 & 0xFFFF;
             let action = match id {
+                ID_ANNOTATE => Some(Action::FlyoutAnnotate),
                 ID_OPEN => Some(Action::FlyoutOpen),
                 ID_FOLDER => Some(Action::FlyoutOpenFolder),
                 ID_COPY => Some(Action::FlyoutCopy),

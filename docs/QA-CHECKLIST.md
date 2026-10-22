@@ -30,7 +30,8 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] Timer delay fires after N seconds (screenshot delay; no visible countdown by design).
 - [ ] Cursor include/exclude honoured.
 - [ ] Output PNG auto-named + saved to the output folder AND copied to the clipboard.
-- [ ] Flyout shows a thumbnail + Open / Open folder / Copy / Copy path / Delete, all working.
+- [ ] Flyout shows a thumbnail + Annotate / Open / Open folder / Copy / Copy path / Delete, all working.
+- [x] Annotate: opens the editor; Rectangle and Text tools draw in red; Text → type → Enter saves; Undo (Ctrl+Z); Save (Ctrl+S) writes `_annotated` copies without overwriting (`_annotated_2` on repeat); closing with unsaved work prompts. *(Driven end-to-end on the release build with real mouse and keyboard events; saved file inspected: annotations at full resolution in the right place.)* Still worth a human look: very large screenshots, text with accents/emoji, multi-monitor DPI.
 - [ ] Protected/DRM window → near-black detected and a warning surfaced (not a silent black PNG).
 
 ## M3 — Recording (MP4, video-only)
