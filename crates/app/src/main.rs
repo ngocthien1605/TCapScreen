@@ -18,6 +18,7 @@ mod logging;
 mod overlay;
 mod record_flow;
 mod recording;
+mod settings_ui;
 mod single_instance;
 mod startup;
 mod tray;
@@ -142,7 +143,8 @@ fn start() -> anyhow::Result<()> {
     // stay alive for the whole message loop.
     let dispatch_hwnd = dispatch::create(settings.clone(), output_folder)?;
     let _tray = tray::build(dispatch_hwnd)?;
-    let _hotkeys = hotkeys::register(&settings.hotkeys, dispatch_hwnd);
+    let hotkeys = hotkeys::register(&settings.hotkeys, dispatch_hwnd);
+    dispatch::with_app(|app| app.hotkeys = hotkeys);
 
     tracing::info!("RustShot is running in the tray");
     run_message_loop();

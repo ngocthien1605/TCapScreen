@@ -104,6 +104,8 @@ pub struct AppState {
     pub recording: Option<crate::recording::Recording>,
     /// A recording request queued behind the countdown.
     pub pending_record: Option<recorder::RecordCfg>,
+    /// Registered global hotkeys (kept alive; replaced when settings change them).
+    pub hotkeys: Option<crate::hotkeys::Hotkeys>,
 }
 
 thread_local! {
@@ -157,6 +159,7 @@ pub fn create(settings: Settings, output_folder: PathBuf) -> Result<HWND> {
             pending_shot: None,
             recording: None,
             pending_record: None,
+            hotkeys: None,
         });
     });
 
@@ -195,9 +198,7 @@ fn handle(action: Action) {
                 flyout::open_in_explorer(&folder);
             }
         }
-        Settings => {
-            tracing::info!("Settings selected (settings UI lands in M6)");
-        }
+        Settings => crate::settings_ui::open(),
         Quit => {
             tracing::info!("Quit selected");
             // SAFETY: posts WM_QUIT to this (UI) thread's queue.

@@ -150,9 +150,28 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 - 🔬 Visual quality / palette optimisation and opening in a browser are a quick manual check
   (QA-CHECKLIST M5).
 
-## M6 — Polish (settings UI, run-at-startup, manifest, USER-GUIDE)  ⬜ Next.
+## M6 — Polish  ✅ (settings dialog UI = manual QA; rest verified)
 
-## M7 — Installer / packaging  ⬜ Not started.
+| Item | Status | How verified |
+|---|---|---|
+| `windows_subsystem = "windows"` (no console) + attach-parent-console for dev | ✅ | `dev` still prints under the GUI subsystem (inherited-handle guard) |
+| Run-at-startup (HKCU Run, re-writes current exe path) | ✅ | enable → key = quoted exe path; disable → removed (verified in registry) |
+| App manifest: Per-Monitor-V2 DPI + asInvoker, embedded via build.rs/rc.exe | ✅ | builds with embedded resources; DPI still set programmatically too |
+| Exe icon embedded (generated from the programmatic tray icon) | ✅ | `dev make-icon` + resource embed |
+| Settings dialog (DLGTEMPLATE: checkboxes, quality/fps edits, folder+Browse) | 🔬 | pure `DlgBuilder` unit-tested (2 tests); dialog is visual → manual QA |
+| Apply-on-OK: save config, update output folder, re-register hotkeys, startup | ✅ (code) | hotkeys moved into `AppState`; re-register drops old then registers |
+| USER-GUIDE.md | ✅ | written (hotkeys, flyout, recording, config keys, troubleshooting) |
+
+**Gate (all green):** build ✅ · clippy -D warnings ✅ · fmt ✅ · unit tests pass.
+
+**Done-when (M6):**
+- Settings persist and take effect — ✅ the apply path saves config and live-updates folder +
+  hotkeys + startup; the dialog **template builder is unit-tested** (header/layout/item count).
+  Driving the actual dialog (clicking controls) is visual → manual QA (QA-CHECKLIST M6).
+- Run-at-startup — ✅ **verified** by inspecting the registry before/after.
+- No console window; DPI manifest present — ✅ (subsystem + embedded manifest).
+
+## M7 — Installer / packaging  ⬜ Next.
 
 ---
 

@@ -170,3 +170,26 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   MP4 share pause/stop and the same `record_flow` UX; the tray offers both.
 - **Verified by re-decoding** (`imaging::probe_gif` with an independent `GifDecoder`): a live
   capture produced a 640×360, 14-frame animated GIF from a 1080p monitor.
+
+## M6 — Polish
+
+- **GUI subsystem + lazy console attach.** `#![windows_subsystem = "windows"]` removes the
+  console for the tray app. `attach_parent_console()` only redirects stdout/stderr to the parent
+  console when stdout is *not* already an inherited handle, so the `dev` CLI and `--help` print
+  from a terminal without clobbering a pipe (which is how our own functional tests capture it).
+- **Run-at-startup re-writes the path.** Enabling always writes `current_exe()` to the HKCU
+  `Run` key (repairs a stale entry if the portable exe moved); disabling deletes it. Applied at
+  startup and on settings OK.
+- **Manifest + icon via `embed-resource`/rc.exe**, embedding `app.manifest` (Per-Monitor-V2 DPI,
+  `asInvoker`, Win10/11 supportedOS) and an `.ico` generated from the programmatic tray icon.
+  `SetProcessDpiAwarenessContext` is kept as well so the un-manifested dev/test binaries are
+  still DPI-correct. Resource embedding is optional so a toolchain without rc.exe still builds.
+- **Settings dialog from an in-memory `DLGTEMPLATE`, not egui.** eframe wants the main-thread
+  event loop, which already belongs to the tray pump + nested overlay/dialog loops — three event
+  loops would fight. A classic dialog template gives tab order, the default button, and
+  Enter/Esc for free via `DialogBoxIndirectParamW`. The template builder (`DlgBuilder`) is pure
+  and unit-tested (the testable core for M6); the dialog itself is visual/manual-QA.
+- **Apply-on-OK re-registers hotkeys**, so the `Hotkeys` handle moved from `start()`'s stack into
+  `AppState`. Re-registration drops the old manager *first* (unregistering its keys) before
+  creating the new one, avoiding a self-conflict on unchanged bindings.
+- **Folder picker via `rfd`** (already a workspace dep; wants STA, which the UI thread is).
