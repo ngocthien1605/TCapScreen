@@ -7,13 +7,13 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] `rustshot.exe` launches to a tray icon with a context menu; no console window.
 - [ ] Tray menu → Quit exits cleanly (process gone, mutex released).
 - [ ] Launching a second instance does not create a second tray icon (single-instance).
-- [ ] `rustshot --dev config` prints the loaded config and the config file path.
+- [ ] `rustshot dev config` prints the loaded config and the config file path.
 - [ ] First run creates `%APPDATA%\RustShot\config.toml` and the output folder.
 - [ ] Logs appear under `%APPDATA%\RustShot\logs`.
 
 ## M1 — Capture engine (stills)
-- [ ] `rustshot --dev list-monitors` lists every display with correct bounds + DPI/scale.
-- [ ] `rustshot --dev grab-monitor 0 out.png` saves a pixel-correct full-monitor PNG.
+- [ ] `rustshot dev list-monitors` lists every display with correct bounds + DPI/scale.
+- [ ] `rustshot dev grab-monitor 0 out.png` saves a pixel-correct full-monitor PNG.
 - [ ] Image is correct on a 150%/200%-scaled monitor (no stretching, correct dimensions).
 - [ ] Wide image where stride ≠ width×4 is not sheared (stride handled).
 
@@ -26,7 +26,7 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] Zero-area region cancels cleanly.
 - [ ] Window pick highlights the window under the cursor; click captures its bounds.
 - [ ] All-monitors captures the full virtual desktop across mixed-DPI displays.
-- [ ] Timer mode shows a countdown then fires.
+- [ ] Timer delay fires after N seconds (screenshot delay; no visible countdown by design).
 - [ ] Cursor include/exclude honoured.
 - [ ] Output PNG auto-named + saved to the output folder AND copied to the clipboard.
 - [ ] Flyout shows a thumbnail + Open / Open folder / Copy / Copy path / Delete, all working.

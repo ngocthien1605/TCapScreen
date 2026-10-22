@@ -317,9 +317,18 @@ struct Draft {
 
 /// Open the modal Settings dialog and, on OK, persist + apply the changes.
 pub fn open() {
-    let Some((settings, parent_raw)) =
-        dispatch::with_app(|a| (a.settings.clone(), a.dispatch_hwnd.0 as isize))
-    else {
+    // Reserve `busy` (same gate as captures/recording) so a hotkey can't open an overlay nested
+    // inside this modal dialog. Released once the dialog closes.
+    let Some((settings, parent_raw)) = dispatch::with_app(|a| {
+        if a.busy || a.recording.is_some() {
+            None
+        } else {
+            a.busy = true;
+            Some((a.settings.clone(), a.dispatch_hwnd.0 as isize))
+        }
+    })
+    .flatten() else {
+        tracing::info!("busy; settings dialog not opened");
         return;
     };
 
@@ -340,6 +349,9 @@ pub fn open() {
             LPARAM(&mut draft as *mut Draft as isize),
         )
     };
+
+    // Release the gate before applying (apply re-enters `with_app` on its own).
+    dispatch::with_app(|a| a.busy = false);
 
     if ret == IDOK.0 as isize {
         if let Some(new) = draft.result.take() {
