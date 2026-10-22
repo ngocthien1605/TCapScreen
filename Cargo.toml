@@ -9,12 +9,12 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
 authors = ["RustShot contributors"]
-repository = "https://github.com/ngocthien1605/TCapScreen"
+repository = "https://github.com/ngocthien1605/rushshot"
 # Internal crates — never published to crates.io.
 publish = false
 
