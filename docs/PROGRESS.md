@@ -171,7 +171,24 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 - Run-at-startup — ✅ **verified** by inspecting the registry before/after.
 - No console window; DPI manifest present — ✅ (subsystem + embedded manifest).
 
-## M7 — Installer / packaging  ⬜ Next.
+## M7 — Installer / packaging  ✅ (portable + release verified; MSI authored, builds on a VM)
+
+| Item | Status | How verified |
+|---|---|---|
+| Release build (`lto=thin`, `strip`, no panic=abort) | ✅ | `cargo build --release` green |
+| Portable zip script | ✅ | `scripts/build-portable.ps1` → `dist/RustShot-<ver>-portable-x64.zip` built & listed |
+| WiX MSI source (`wix/main.wxs`): Program Files install, Start-menu shortcut, ARP entry, major-upgrade | ✅ (authored) | WiX not installed here → building the MSI is a release step (🔬) |
+| `cargo-deny` policy (`deny.toml`): advisories, license allow-list, source/version bans | ✅ (authored) | cargo-deny not installed → `cargo deny check` is a CI/release step (🔬) |
+| MIT license + LICENSE file | ✅ | committed |
+| `docs/PACKAGING.md` | ✅ | portable + MSI + cargo-deny instructions |
+
+**Gate (all green):** build ✅ · clippy -D warnings ✅ · fmt ✅ · 75 unit tests.
+
+**Done-when (M7):** a portable build and an installer exist.
+- ✅ **portable zip built and verified** (contains the release exe + guide + license).
+- 🔬 **The MSI and `cargo deny check` need their tools** (WiX, cargo-deny), which aren't present
+  in this environment; the sources are authored and documented. Installing on a clean Windows 11
+  VM (install → Start-menu launch → uninstall) is the release-time QA item (QA-CHECKLIST M7).
 
 ---
 

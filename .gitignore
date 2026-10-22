@@ -10,3 +10,6 @@
 *.gif
 # Keep committed sample/fixture assets explicitly if ever needed
 !docs/**/*.png
+
+# Packaging output
+/dist/

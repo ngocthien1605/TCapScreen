@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<!--
+  WiX v3 installer source for RustShot, built with cargo-wix:
+      cargo install cargo-wix
+      cargo wix            # produces target/wix/RustShot-<version>-x86_64.msi
+  cargo-wix supplies $(var.Version), $(var.Platform), and $(var.CargoTargetBinDir).
+  Paths without that variable are relative to this file (wix/).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="RustShot"
+           UpgradeCode="7F2C1E84-3B6A-4C5D-9E21-0A1B2C3D4E5F"
+           Language="1033"
+           Codepage="1252"
+           Manufacturer="RustShot contributors"
+           Version="$(var.Version)">
+
+    <Package Id="*"
+             Keywords="Installer"
+             Description="RustShot — screenshots and screen recording for Windows"
+             Manufacturer="RustShot contributors"
+             InstallerVersion="450"
+             Languages="1033"
+             Compressed="yes"
+             InstallScope="perMachine"
+             SummaryCodepage="1252" />
+
+    <MajorUpgrade Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of RustShot is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="ProductIcon" SourceFile="..\crates\app\resources\rustshot.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
+    <Property Id="ARPHELPLINK" Value="https://example.invalid/rustshot" />
+
+    <Feature Id="MainFeature" Title="RustShot" Level="1">
+      <ComponentRef Id="RustShotExe" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="RustShot">
+          <Component Id="RustShotExe" Guid="*">
+            <File Id="RustShotExeFile"
+                  Source="$(var.CargoTargetBinDir)\rustshot.exe"
+                  KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Component Id="StartMenuShortcut" Guid="*">
+          <Shortcut Id="RustShotShortcut"
+                    Name="RustShot"
+                    Target="[INSTALLDIR]rustshot.exe"
+                    WorkingDirectory="INSTALLDIR"
+                    Icon="ProductIcon" />
+          <RemoveFolder Id="CleanProgramMenu" On="uninstall" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\RustShot"
+                         Name="installed"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+  </Product>
+</Wix>
