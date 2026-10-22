@@ -21,7 +21,7 @@ From the tray **Screenshot** submenu:
 
 | Item | What it does |
 |---|---|
-| **Region** | Dims the screen; drag a rectangle. Release to capture, `Esc` to cancel, `Enter` to confirm the current rectangle. |
+| **Region** | Dims the screen and draws a white crosshair (with a dark edge) across the whole screen through the cursor. The window under the cursor is outlined in red; drag a rectangle to select your own area, outlined in red. Release to capture, `Esc` to cancel, `Enter` to confirm the current rectangle. |
 | **Window** | On the same overlay, click a window to capture just that window. |
 | **Monitor** | Captures the monitor the mouse is on. |
 | **All monitors** | Captures the entire virtual desktop across every monitor. |

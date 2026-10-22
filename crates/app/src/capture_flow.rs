@@ -123,10 +123,18 @@ fn run_capture(
             backend.grab(&CaptureTarget::Monitor(id), opts)?
         }
         ShotKind::AllMonitors => backend.grab(&CaptureTarget::VirtualDesktop, opts)?,
-        ShotKind::Region | ShotKind::Window => match interactive(&backend, opts)? {
-            Some(f) => f,
-            None => return Ok(None),
-        },
+        ShotKind::Region | ShotKind::Window => {
+            // Only the Region screenshot gets the crosshair look; Window pick keeps the classic one.
+            let style = if kind == ShotKind::Region {
+                overlay::Style::Crosshair
+            } else {
+                overlay::Style::Classic
+            };
+            match interactive(&backend, opts, style)? {
+                Some(f) => f,
+                None => return Ok(None),
+            }
+        }
     };
 
     let img = imaging::frame_to_rgba(&frame, true)?;
@@ -151,7 +159,11 @@ fn run_capture(
 }
 
 /// Freeze the virtual desktop and run the selection overlay; resolve the outcome into a frame.
-fn interactive(backend: &WindowsBackend, opts: GrabOpts) -> Result<Option<Frame>> {
+fn interactive(
+    backend: &WindowsBackend,
+    opts: GrabOpts,
+    style: overlay::Style,
+) -> Result<Option<Frame>> {
     let mons = backend.monitors()?;
     let bbox = bounding_box(&mons.iter().map(|m| m.bounds).collect::<Vec<_>>());
     if bbox.is_empty() {
@@ -161,7 +173,7 @@ fn interactive(backend: &WindowsBackend, opts: GrabOpts) -> Result<Option<Frame>
     let frozen = backend.grab(&CaptureTarget::VirtualDesktop, opts)?;
 
     let origin = Point::new(bbox.x, bbox.y);
-    match overlay::select(&windows, &frozen, bbox)? {
+    match overlay::select(&windows, &frozen, bbox, style)? {
         Outcome::Cancel => Ok(None),
         Outcome::Region(rect) => Ok(Some(frozen.crop(rect.to_local(origin)))),
         Outcome::Window(id) => {

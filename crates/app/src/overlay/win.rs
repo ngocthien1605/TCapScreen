@@ -14,14 +14,15 @@ use std::sync::Once;
 use anyhow::{Context, Result};
 use capture_core::{Frame, Point, Rect, WindowInfo};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection,
-    CreateFontW, CreatePen, DeleteDC, DeleteObject, EndPaint, GetStockObject,
-    GetTextExtentPoint32W, InvalidateRect, Rectangle, ReleaseDC, SelectObject, SetBkColor,
-    SetBkMode, SetTextColor, TextOutW, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, HBITMAP, HDC, HFONT,
-    HGDIOBJ, HOLLOW_BRUSH, OPAQUE, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY,
+    CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect,
+    GetStockObject, GetTextExtentPoint32W, InvalidateRect, Rectangle, ReleaseDC, SelectObject,
+    SetBkColor, SetBkMode, SetTextColor, TextOutW, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER,
+    BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS,
+    HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, OPAQUE, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+    PS_SOLID, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
@@ -34,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOPMOST, WS_POPUP,
 };
 
-use super::state::{label_position, Outcome, SelectionState};
+use super::state::{crosshair_bars, label_position, Outcome, SelectionState, Style};
 
 const CLASS_NAME: PCWSTR = w!("RustShotOverlay");
 static REGISTER: Once = Once::new();
@@ -44,7 +45,7 @@ const DIM_ALPHA: u8 = 120;
 
 /// Run the selection overlay over the frozen desktop `frozen` (which spans `bbox`, in
 /// virtual-desktop physical px). Blocks until the user confirms or cancels.
-pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect) -> Result<Outcome> {
+pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect, style: Style) -> Result<Outcome> {
     ensure_class()?;
 
     let mut ctx = Box::new(OverlayCtx {
@@ -52,7 +53,8 @@ pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect) -> Result<Outc
         origin: Point::new(bbox.x, bbox.y),
         width: bbox.width,
         height: bbox.height,
-        gdi: Gdi::new(frozen, bbox.width, bbox.height)?,
+        gdi: Gdi::new(frozen, bbox.width, bbox.height, style)?,
+        style,
         outcome: None,
         done: false,
     });
@@ -168,6 +170,7 @@ struct OverlayCtx {
     width: i32,
     height: i32,
     gdi: Gdi,
+    style: Style,
     outcome: Option<Outcome>,
     done: bool,
 }
@@ -331,10 +334,17 @@ fn paint(hwnd: HWND, ctx: &mut OverlayCtx) {
                 );
                 draw_border(g, cr);
             }
+        }
+
+        // 4. crosshair through the cursor (Region screenshots), under the dimension label.
+        if ctx.style == Style::Crosshair {
+            draw_crosshair(ctx, g);
+        }
+        if let Some(vrect) = highlight {
             draw_label(ctx, g, vrect);
         }
 
-        // 4. present.
+        // 5. present.
         let _ = BitBlt(
             hdc,
             0,
@@ -347,6 +357,29 @@ fn paint(hwnd: HWND, ctx: &mut OverlayCtx) {
             SRCCOPY,
         );
         let _ = EndPaint(hwnd, &ps);
+    }
+}
+
+/// Full-width / full-height crosshair through the cursor: a 3 px black edge with a 1 px white
+/// line on top, so it stays visible on both light and dark content.
+fn draw_crosshair(ctx: &OverlayCtx, g: &Gdi) {
+    let c = Point::new(
+        ctx.state.cursor().x - ctx.origin.x,
+        ctx.state.cursor().y - ctx.origin.y,
+    );
+    for (grow, brush) in [(1, g.edge_brush), (0, g.line_brush)] {
+        for bar in crosshair_bars(c, ctx.width, ctx.height, grow) {
+            let r = RECT {
+                left: bar.x,
+                top: bar.y,
+                right: bar.right(),
+                bottom: bar.bottom(),
+            };
+            // SAFETY: fills a rectangle in our back-buffer DC with a brush we own; GDI clips it.
+            unsafe {
+                FillRect(g.back_dc, &r, brush);
+            }
+        }
     }
 }
 
@@ -398,11 +431,13 @@ struct Gdi {
     back_bmp: HBITMAP,
     back_old: HGDIOBJ,
     pen: windows::Win32::Graphics::Gdi::HPEN,
+    line_brush: HBRUSH,
+    edge_brush: HBRUSH,
     font: HFONT,
 }
 
 impl Gdi {
-    fn new(frozen: &Frame, w: i32, h: i32) -> Result<Gdi> {
+    fn new(frozen: &Frame, w: i32, h: i32, style: Style) -> Result<Gdi> {
         // SAFETY: GDI object creation; failures are checked and the Drop impl cleans up.
         unsafe {
             let screen = windows::Win32::Graphics::Gdi::GetDC(None);
@@ -414,7 +449,13 @@ impl Gdi {
             let back_old = SelectObject(back_dc, HGDIOBJ(back_bmp.0));
             ReleaseDC(None, screen);
 
-            let pen = CreatePen(PS_SOLID, 2, rgb(0, 180, 255));
+            let border = match style {
+                Style::Classic => rgb(0, 180, 255),
+                Style::Crosshair => rgb(255, 0, 0),
+            };
+            let pen = CreatePen(PS_SOLID, 2, border);
+            let line_brush = CreateSolidBrush(rgb(255, 255, 255));
+            let edge_brush = CreateSolidBrush(rgb(0, 0, 0));
             let font = CreateFontW(
                 -20,
                 0,
@@ -443,6 +484,8 @@ impl Gdi {
                 back_bmp,
                 back_old,
                 pen,
+                line_brush,
+                edge_brush,
                 font,
             })
         }
@@ -463,6 +506,8 @@ impl Drop for Gdi {
             let _ = DeleteObject(HGDIOBJ(self.back_bmp.0));
             let _ = DeleteDC(self.back_dc);
             let _ = DeleteObject(HGDIOBJ(self.pen.0));
+            let _ = DeleteObject(HGDIOBJ(self.line_brush.0));
+            let _ = DeleteObject(HGDIOBJ(self.edge_brush.0));
             let _ = DeleteObject(HGDIOBJ(self.font.0));
         }
     }

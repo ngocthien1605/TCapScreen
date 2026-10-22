@@ -144,6 +144,28 @@ pub fn pick_window(windows: &[WindowInfo], p: Point) -> Option<WindowId> {
     windows.iter().find(|w| w.bounds.contains(p)).map(|w| w.id)
 }
 
+/// How the selection overlay looks. Behaviour (hover, drag, click, Esc) is identical in both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    /// Blue selection border and the plain system cross cursor.
+    Classic,
+    /// Red selection border plus a full-width / full-height white crosshair with a dark edge
+    /// through the cursor.
+    Crosshair,
+}
+
+/// The two crosshair bars through `cursor` (client coordinates) on a `width × height` surface:
+/// a horizontal bar spanning the full width and a vertical bar spanning the full height. Each is
+/// `1 + 2 * grow` px thick, centred on the cursor — `grow = 0` gives the 1 px line, `grow = 1`
+/// the 3 px dark edge drawn beneath it. Pure, for unit testing.
+pub fn crosshair_bars(cursor: Point, width: i32, height: i32, grow: i32) -> [Rect; 2] {
+    let thick = 1 + 2 * grow;
+    [
+        Rect::new(0, cursor.y - grow, width, thick),
+        Rect::new(cursor.x - grow, 0, thick, height),
+    ]
+}
+
 /// Decide where to draw the `W × H` dimension label so it stays on-screen: normally just
 /// below-right of the cursor, but flipped inside when near the right/bottom edge of `bounds`.
 /// Returns the top-left corner for a label of `label_w × label_h` px. Pure, for unit testing.
@@ -166,6 +188,20 @@ pub fn label_position(cursor: Point, label_w: i32, label_h: i32, bounds: Rect) -
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crosshair_bars_span_the_surface_through_the_cursor() {
+        let [h, v] = crosshair_bars(Point::new(300, 200), 1920, 1080, 0);
+        assert_eq!(h, Rect::new(0, 200, 1920, 1));
+        assert_eq!(v, Rect::new(300, 0, 1, 1080));
+    }
+
+    #[test]
+    fn crosshair_edge_is_one_pixel_wider_each_side() {
+        let [h, v] = crosshair_bars(Point::new(300, 200), 1920, 1080, 1);
+        assert_eq!(h, Rect::new(0, 199, 1920, 3));
+        assert_eq!(v, Rect::new(299, 0, 3, 1080));
+    }
 
     fn win(id: isize, x: i32, y: i32, w: i32, h: i32) -> WindowInfo {
         WindowInfo {

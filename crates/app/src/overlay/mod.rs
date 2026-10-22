@@ -5,5 +5,5 @@
 pub mod state;
 mod win;
 
-pub use state::Outcome;
+pub use state::{Outcome, Style};
 pub use win::select;

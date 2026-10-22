@@ -23,6 +23,7 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 > `rustshot dev {list-windows,grab-all,grab-region,grab-window,clipboard-image}` plus a
 > scripted System.Drawing check. The items below are the interactive/visual ones.
 - [ ] Region hotkey dims all monitors; drag shows live W×H; Enter/release captures; Esc cancels.
+- [x] Region overlay look: full-screen white crosshair with a dark edge follows the cursor, hovered window / dragged selection has a red border and stays bright, size label stays on top. *(Verified by screenshotting the running overlay, idle and mid-drag.)* Window mode and region recording keep the original blue border with no crosshair *(Window mode verified the same way; recording uses the same unchanged code path).*
 - [ ] Zero-area region cancels cleanly.
 - [ ] Window pick highlights the window under the cursor; click captures its bounds.
 - [ ] All-monitors captures the full virtual desktop across mixed-DPI displays.
