@@ -10,6 +10,14 @@ use capture_core::{Frame, PixelFmt, Rect};
 use image::{codecs::jpeg::JpegEncoder, ImageEncoder, RgbImage, RgbaImage};
 use thiserror::Error;
 
+/// Re-export so downstream crates can name the RGBA image type without depending on `image`.
+pub use image::RgbaImage as Rgba;
+
+/// Load an image file (PNG/JPEG) from disk as RGBA.
+pub fn load_rgba(path: &Path) -> Result<RgbaImage, ImagingError> {
+    Ok(image::open(path)?.to_rgba8())
+}
+
 /// Errors from imaging operations.
 #[derive(Debug, Error)]
 pub enum ImagingError {
@@ -177,6 +185,22 @@ pub struct Timestamp {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
+}
+
+impl Timestamp {
+    /// The current local time (falling back to UTC if the local offset can't be determined).
+    pub fn now_local() -> Self {
+        let now =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        Self {
+            year: now.year(),
+            month: u8::from(now.month()),
+            day: now.day(),
+            hour: now.hour(),
+            minute: now.minute(),
+            second: now.second(),
+        }
+    }
 }
 
 /// Build a base filename `RustShot_YYYY-MM-DD_HH-mm-ss.<ext>`.

@@ -18,6 +18,10 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] Wide image where stride ≠ width×4 is not sheared (stride handled).
 
 ## M2 — Screenshots
+> Already verified by automation (no manual step needed): monitor / window / region /
+> all-monitors grab, auto-naming, PNG/JPEG save, and clipboard image copy — via
+> `rustshot dev {list-windows,grab-all,grab-region,grab-window,clipboard-image}` plus a
+> scripted System.Drawing check. The items below are the interactive/visual ones.
 - [ ] Region hotkey dims all monitors; drag shows live W×H; Enter/release captures; Esc cancels.
 - [ ] Zero-area region cancels cleanly.
 - [ ] Window pick highlights the window under the cursor; click captures its bounds.

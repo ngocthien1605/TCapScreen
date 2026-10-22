@@ -14,3 +14,4 @@ workspace = true
 capture-core.workspace = true
 image.workspace = true
 thiserror.workspace = true
+time.workspace = true

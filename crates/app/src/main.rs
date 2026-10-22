@@ -6,9 +6,15 @@
 // NOTE: `#![windows_subsystem = "windows"]` (hide the console) is deliberately deferred to M6
 // so the dev CLI and early manual testing can print to a console. See DECISIONS.md.
 
+mod capture_flow;
+mod clipboard;
 mod dev;
+mod dispatch;
+mod flyout;
+mod hotkeys;
 mod icon;
 mod logging;
+mod overlay;
 mod single_instance;
 mod tray;
 
@@ -16,6 +22,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use config::Settings;
+use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+};
 
 use crate::single_instance::SingleInstance;
 
@@ -62,9 +73,8 @@ fn run_app() -> ExitCode {
     // Enforce a single instance.
     match SingleInstance::acquire(SINGLE_INSTANCE_NAME) {
         Ok(Some(guard)) => {
-            // Keep the guard alive for the whole run.
             let _guard = guard;
-            if let Err(e) = start(&_guard) {
+            if let Err(e) = start() {
                 tracing::error!("fatal: {e:#}");
                 eprintln!("RustShot failed to start: {e:#}");
                 return ExitCode::FAILURE;
@@ -84,7 +94,12 @@ fn run_app() -> ExitCode {
     }
 }
 
-fn start(_instance: &SingleInstance) -> anyhow::Result<()> {
+fn start() -> anyhow::Result<()> {
+    // Initialise COM as STA on the UI thread for shell verbs (and M6 file dialogs). The capture
+    // backend later attempts RoInitialize(MTA) on this thread; that returns RPC_E_CHANGED_MODE
+    // and is harmlessly tolerated — WGC's free-threaded frame pool is apartment-agnostic.
+    init_com_sta();
+
     // Load + repair config; create it on first run.
     let config_path = config::paths::config_file()?;
     let mut settings = Settings::load_from(&config_path)?;
@@ -110,5 +125,41 @@ fn start(_instance: &SingleInstance) -> anyhow::Result<()> {
         );
     }
 
-    tray::run(output_folder)
+    // Create the dispatch window (owns app state), the tray, and the global hotkeys. Each must
+    // stay alive for the whole message loop.
+    let dispatch_hwnd = dispatch::create(settings.clone(), output_folder)?;
+    let _tray = tray::build(dispatch_hwnd)?;
+    let _hotkeys = hotkeys::register(&settings.hotkeys, dispatch_hwnd);
+
+    tracing::info!("RustShot is running in the tray");
+    run_message_loop();
+    tracing::info!("RustShot tray loop exited");
+    Ok(())
+}
+
+fn init_com_sta() {
+    // SAFETY: initialises COM for this thread; tolerate an already-initialised apartment.
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if hr.is_err() && hr != RPC_E_CHANGED_MODE {
+            tracing::warn!("CoInitializeEx(STA) returned {hr:?}");
+        }
+    }
+}
+
+/// Standard blocking Win32 message loop; returns when WM_QUIT is received.
+fn run_message_loop() {
+    // SAFETY: standard message pump; `msg` is a valid, writable MSG for the duration.
+    unsafe {
+        let mut msg = MSG::default();
+        loop {
+            let ret = GetMessageW(&mut msg, None, 0, 0);
+            if ret.0 <= 0 {
+                // 0 = WM_QUIT, -1 = error: either way, stop pumping.
+                break;
+            }
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
 }

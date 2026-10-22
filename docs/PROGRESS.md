@@ -49,14 +49,50 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
   the live WGC path is confirmed on the one available display. Running on a mixed-DPI
   multi-monitor rig remains a manual QA item (QA-CHECKLIST M1).
 
-## M2 — Screenshots complete  ⬜ Next.
-Region overlay, window pick, all-monitors, timer, cursor toggle, clipboard, flyout, hotkeys.
+## M2 — Screenshots complete  ✅ (automatable paths verified; interactive UI = manual QA)
 
-## M3–M7  ⬜ Not started.
+| Item | Status | How verified |
+|---|---|---|
+| Action bus (hidden dispatch window; menu/hotkey/timer/flyout post `Action`s) | ✅ | live run; tray + loop |
+| Monitor-under-cursor + all-monitors (virtual desktop) grab | ✅ | `dev grab-all` → 1920×1080 PNG (scripted: stddev 83.3) |
+| Region grab (freeze → crop) | ✅ | `dev grab-region 100 100 640 480` → 640×480 (stddev 33.7) |
+| Window grab (clean recapture) | ✅ | `dev grab-window Brave` → 1920×1032 JPEG (stddev 71.3) |
+| Window enumeration (filter cloaked/tool/untitled/minimized-offscreen) | ✅ | `dev list-windows` live |
+| Clipboard image copy (arboard `image-data`) | ✅ | `dev clipboard-image` → PS `Clipboard.GetImage()` returns 640×480 |
+| Auto-name + unique_path + save (PNG/JPEG) | ✅ | files written with `RustShot_…` names; unit-tested |
+| Global hotkeys (map + register + route → dispatch) | ✅ | live: Ctrl+Shift+R/S registered; PrintScreen combos claimed by OS → warn, non-fatal |
+| Delay timer (worker thread → `ExecuteDelayedShot`) | ✅ (code) | no-sleep-on-UI design; fires capture after N s |
+| Pure selection state machine (drag/click/esc/enter, window pick, label placement) | ✅ | 10 unit tests |
+| Hotkey→Code mapping table | ✅ | 6 unit tests |
+| Region overlay window (frozen backdrop, dim, rubber-band, highlight, W×H label) | 🔬 | compiles + clippy-clean; **visual → manual QA** |
+| Post-capture flyout (thumbnail + 5 buttons + auto-dismiss) | 🔬 | compiles + clippy-clean; **visual → manual QA** |
+
+**Gate (all green):** build ✅ · clippy -D warnings ✅ · fmt ✅ · **69 unit tests pass** (was 53).
+
+**Done-when (M2):**
+- A screenshot can be taken and saved+copied — ✅ **verified live** for monitor/window/region/
+  all-monitors via the `dev` commands, with scripted validation of dimensions + real content
+  and a confirmed clipboard round-trip.
+- 🔬 **Interactive overlay + flyout are visual/UI and not scriptable here**: the Win32 code
+  builds and is clippy-clean, and the *pure* interaction logic (what to select, where to place
+  the label, which window wins) is unit-tested. Exercising the dimmed overlay, rubber-band,
+  window highlight, and the five flyout buttons is a manual-QA item (QA-CHECKLIST M2).
+- 🔬 Mixed-DPI multi-monitor behaviour still needs a suitable rig (single 100% display here).
+
+## M3 — Recording (MP4)  ⬜ Next.
+
+## M4–M7  ⬜ Not started.
 
 ---
 
 ### Verification log
+- 2026-10-22: M2 gate green (build/clippy -D warnings/fmt/test: **69 tests pass**). Live:
+  `dev list-windows` (5 windows), `grab-all` (1920×1080), `grab-region 100 100 640 480`
+  (640×480), `grab-window Brave` (1920×1032 JPEG); scripted System.Drawing check confirmed
+  dimensions + real content (lum-stddev 83.3/33.7/71.3). `dev clipboard-image` → PowerShell
+  `Clipboard.GetImage()` returned a 640×480 bitmap (round-trip OK). Tray app boots, installs
+  the dispatch window, Ctrl+Shift+R/S hotkeys registered; PrintScreen combos already held by
+  the OS/Snipping Tool → logged as warnings, app continued (graceful degradation).
 - 2026-10-22: Toolchain smoke test — minimal cargo bin builds, links (MSVC auto-detected
   despite Git's `link.exe` on PATH), and runs. crates.io reachable.
 - 2026-10-22: M0 gate green (build/clippy -D warnings/fmt/test: 49 tests pass). `dev paths`

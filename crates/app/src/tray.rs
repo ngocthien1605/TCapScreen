@@ -1,34 +1,23 @@
-//! System tray icon + context menu and the Win32 message loop that drives them.
-//!
-//! M0 scope: the menu structure is in place (Screenshot/Record submenus are stubs that log
-//! "not yet implemented"); Open-output-folder, Settings, and Quit are wired. Hotkeys, the
-//! region overlay, capture, and the flyout arrive in M1/M2.
-
-use std::path::PathBuf;
+//! System tray icon + context menu. Menu clicks are translated into dispatch [`Action`]s and
+//! posted to the dispatch window; the tray holds no application state itself. The blocking
+//! Win32 message loop lives in `main` and drives both this tray and the hotkey/overlay windows.
 
 use anyhow::{Context, Result};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{Icon, TrayIconBuilder};
-use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, PostQuitMessage, TranslateMessage, MSG,
-};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use windows::Win32::Foundation::HWND;
 
+use crate::dispatch::{self, Action};
 use crate::icon::app_icon_rgba;
 
-/// IDs of the menu items we react to (kept so the event handler can match them).
-struct MenuIds {
-    shot_region: MenuId,
-    shot_window: MenuId,
-    shot_monitor: MenuId,
-    shot_all: MenuId,
-    rec_region: MenuId,
-    open_folder: MenuId,
-    settings: MenuId,
-    quit: MenuId,
+/// Menu-item ids we react to, paired with the action each posts.
+struct Routes {
+    entries: Vec<(MenuId, Action)>,
 }
 
-/// Build the tray, install the menu-event handler, and run the message loop until Quit.
-pub fn run(output_folder: PathBuf) -> Result<()> {
+/// Build the tray icon + menu and install the menu-event handler. The returned [`TrayIcon`]
+/// must be kept alive for the whole run.
+pub fn build(dispatch_hwnd: HWND) -> Result<TrayIcon> {
     let menu = Menu::new();
 
     let shot_region = MenuItem::new("Screenshot — Region", true, None);
@@ -40,7 +29,7 @@ pub fn run(output_folder: PathBuf) -> Result<()> {
         .append_items(&[&shot_region, &shot_window, &shot_monitor, &shot_all])
         .context("building Screenshot submenu")?;
 
-    let rec_region = MenuItem::new("Record — Region", true, None);
+    let rec_region = MenuItem::new("Record — Region (M3)", true, None);
     let record_menu = Submenu::new("Record", true);
     record_menu
         .append_items(&[&rec_region])
@@ -61,81 +50,41 @@ pub fn run(output_folder: PathBuf) -> Result<()> {
     ])
     .context("building tray menu")?;
 
-    let ids = MenuIds {
-        shot_region: shot_region.id().clone(),
-        shot_window: shot_window.id().clone(),
-        shot_monitor: shot_monitor.id().clone(),
-        shot_all: shot_all.id().clone(),
-        rec_region: rec_region.id().clone(),
-        open_folder: open_folder.id().clone(),
-        settings: settings.id().clone(),
-        quit: quit.id().clone(),
+    let routes = Routes {
+        entries: vec![
+            (shot_region.id().clone(), Action::ShotRegion),
+            (shot_window.id().clone(), Action::ShotWindow),
+            (shot_monitor.id().clone(), Action::ShotMonitor),
+            (shot_all.id().clone(), Action::ShotAllMonitors),
+            (rec_region.id().clone(), Action::RecordRegion),
+            (open_folder.id().clone(), Action::OpenFolder),
+            (settings.id().clone(), Action::Settings),
+            (quit.id().clone(), Action::Quit),
+        ],
     };
 
     let (rgba, w, h) = app_icon_rgba();
     let tray_icon = Icon::from_rgba(rgba, w, h).context("building tray icon")?;
 
-    // The tray icon must stay alive for the whole loop.
-    let _tray = TrayIconBuilder::new()
+    let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("RustShot — idle")
         .with_icon(tray_icon)
         .build()
         .context("creating tray icon")?;
 
-    install_menu_handler(ids, output_folder);
+    install_menu_handler(routes, dispatch_hwnd);
 
-    tracing::info!("RustShot is running in the tray");
-    run_message_loop();
-    tracing::info!("RustShot tray loop exited");
-    Ok(())
+    Ok(tray)
 }
 
-fn install_menu_handler(ids: MenuIds, output_folder: PathBuf) {
+fn install_menu_handler(routes: Routes, dispatch_hwnd: HWND) {
+    // HWND is not Send; carry it as isize and reconstruct on the UI thread where the handler runs.
+    let hwnd_raw = dispatch_hwnd.0 as isize;
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        let id = event.id;
-        if id == ids.quit {
-            tracing::info!("Quit selected");
-            // SAFETY: called on the message-loop thread; posts WM_QUIT to this thread's queue.
-            unsafe { PostQuitMessage(0) };
-        } else if id == ids.open_folder {
-            open_folder(&output_folder);
-        } else if id == ids.settings {
-            tracing::info!("Settings selected (settings UI lands in M6)");
-        } else if id == ids.shot_region
-            || id == ids.shot_window
-            || id == ids.shot_monitor
-            || id == ids.shot_all
-        {
-            tracing::info!("Screenshot action selected (capture lands in M1/M2)");
-        } else if id == ids.rec_region {
-            tracing::info!("Record action selected (recording lands in M3)");
+        if let Some((_, action)) = routes.entries.iter().find(|(id, _)| *id == event.id) {
+            // SAFETY: PostMessageW is thread-safe; the dispatch window outlives the tray.
+            dispatch::post(HWND(hwnd_raw as *mut std::ffi::c_void), *action);
         }
     }));
-}
-
-fn open_folder(path: &PathBuf) {
-    if let Err(e) = std::fs::create_dir_all(path) {
-        tracing::warn!("could not create output folder {}: {e}", path.display());
-    }
-    if let Err(e) = std::process::Command::new("explorer").arg(path).spawn() {
-        tracing::warn!("could not open output folder: {e}");
-    }
-}
-
-/// Standard blocking Win32 message loop; returns when WM_QUIT is received.
-fn run_message_loop() {
-    // SAFETY: standard message pump; `msg` is a valid, writable MSG for the duration.
-    unsafe {
-        let mut msg = MSG::default();
-        loop {
-            let ret = GetMessageW(&mut msg, None, 0, 0);
-            if ret.0 <= 0 {
-                // 0 = WM_QUIT, -1 = error: either way, stop pumping.
-                break;
-            }
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
 }

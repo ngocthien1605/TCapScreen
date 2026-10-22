@@ -59,3 +59,42 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   `Frame::blit_into` a bounding-box buffer. Wired now; exercised from the UI in M2.
 - **Near-black (DRM) detection** is a pure `imaging::is_near_black` heuristic; the app *warns*
   but still saves — a legitimately black screen is still a valid capture.
+
+## M2 — Screenshots complete
+
+- **Overlay = raw Win32, a single window over the virtual-desktop bounding box, painting a
+  *frozen* capture.** No winit/eframe (avoids a second event loop fighting the tray's
+  `GetMessageW` pump; winit 0.31 is beta). No `WS_EX_LAYERED` transparency: we freeze the
+  desktop first (one `grab(VirtualDesktop)`), dim it with a 1×1 AlphaBlend, and restore the
+  selection/hover region undimmed. The shot is cropped from the frozen frame, so the overlay
+  can never leak into it and there is no hide-then-recapture race.
+- **Action bus (`dispatch.rs`).** `MenuEvent`/`GlobalHotKeyEvent` handlers must be
+  `Fn + Send + Sync + 'static`, so they can't hold app state; they `PostMessage` a `repr(u32)`
+  `Action` to a hidden `HWND_MESSAGE` window whose proc owns all state via a thread-local
+  `AppState`. A `busy` flag drops a second trigger while an overlay is open. HWND isn't `Send`,
+  so handlers carry it as `isize` and rebuild it on the UI thread (where they actually fire).
+- **Pure interaction core (`overlay/state.rs`, `hotkeys.rs`).** The selection state machine and
+  the hotkey→`Code` table are Win32-free and unit-tested; the `win.rs`/`register` layers are
+  thin plumbing. This is what keeps M2 honest on a machine where the overlay itself can't be
+  scripted.
+- **Window pick shares the overlay.** Click-without-drag (< 4 px) selects the top-most window
+  under the cursor (`EnumWindows` z-order, first containing match); result is a clean
+  `grab(Window)` recapture, falling back to a frozen-crop of the window bounds on error.
+- **Capture flow never holds the `AppState` borrow across the nested overlay loop.** It clones
+  the few needed settings out, runs with a fresh (zero-sized) `WindowsBackend`, then re-enters
+  only to stash the flyout and clear `busy` — so re-entrant actions during an open overlay are
+  safe.
+- **Delay/timer off the UI thread.** A worker thread sleeps then posts `ExecuteDelayedShot`;
+  the UI pump never blocks (per-second countdown UI is deferred — it belongs with the recording
+  toolbar in M4).
+- **Main thread is COM STA** (`CoInitializeEx`) for shell verbs / future file dialogs; the
+  capture backend's `RoInitialize(MTA)` then returns `RPC_E_CHANGED_MODE`, tolerated — WGC's
+  free-threaded pool is apartment-agnostic.
+- **Hotkey registration failures are warnings, not fatal.** On Windows 11 `PrintScreen` (and
+  often its combos) are held by the Snipping Tool / other tools; we log and continue, and the
+  tray menu always provides the same actions.
+- **`arboard` needs its `image-data` feature re-enabled** on the `app` dependency (the workspace
+  pins it `default-features = false`), or `set_image` wouldn't exist.
+- **Flyout is Win32, non-modal, StretchDIBits thumbnail.** It stores a heap-stable `Box` so its
+  window proc can reach it by pointer; buttons post `Flyout*` actions back through the dispatch
+  window, keeping all mutation on the UI thread.
