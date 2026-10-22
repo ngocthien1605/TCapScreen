@@ -144,16 +144,6 @@ pub fn pick_window(windows: &[WindowInfo], p: Point) -> Option<WindowId> {
     windows.iter().find(|w| w.bounds.contains(p)).map(|w| w.id)
 }
 
-/// How the selection overlay looks. Behaviour (hover, drag, click, Esc) is identical in both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Style {
-    /// Blue selection border and the plain system cross cursor.
-    Classic,
-    /// Red selection border plus a full-width / full-height white crosshair with a dark edge
-    /// through the cursor.
-    Crosshair,
-}
-
 /// The two crosshair bars through `cursor` (client coordinates) on a `width × height` surface:
 /// a horizontal bar spanning the full width and a vertical bar spanning the full height. Each is
 /// `1 + 2 * grow` px thick, centred on the cursor — `grow = 0` gives the 1 px line, `grow = 1`

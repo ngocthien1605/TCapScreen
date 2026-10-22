@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOPMOST, WS_POPUP,
 };
 
-use super::state::{crosshair_bars, label_position, Outcome, SelectionState, Style};
+use super::state::{crosshair_bars, label_position, Outcome, SelectionState};
 
 const CLASS_NAME: PCWSTR = w!("RustShotOverlay");
 static REGISTER: Once = Once::new();
@@ -45,7 +45,7 @@ const DIM_ALPHA: u8 = 120;
 
 /// Run the selection overlay over the frozen desktop `frozen` (which spans `bbox`, in
 /// virtual-desktop physical px). Blocks until the user confirms or cancels.
-pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect, style: Style) -> Result<Outcome> {
+pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect) -> Result<Outcome> {
     ensure_class()?;
 
     let mut ctx = Box::new(OverlayCtx {
@@ -53,8 +53,7 @@ pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect, style: Style) 
         origin: Point::new(bbox.x, bbox.y),
         width: bbox.width,
         height: bbox.height,
-        gdi: Gdi::new(frozen, bbox.width, bbox.height, style)?,
-        style,
+        gdi: Gdi::new(frozen, bbox.width, bbox.height)?,
         outcome: None,
         done: false,
     });
@@ -170,7 +169,6 @@ struct OverlayCtx {
     width: i32,
     height: i32,
     gdi: Gdi,
-    style: Style,
     outcome: Option<Outcome>,
     done: bool,
 }
@@ -339,10 +337,8 @@ fn paint(hwnd: HWND, ctx: &mut OverlayCtx) {
             }
         }
 
-        // 4. crosshair through the cursor (Region screenshots), under the dimension label.
-        if ctx.style == Style::Crosshair {
-            draw_crosshair(ctx, g);
-        }
+        // 4. crosshair through the cursor, under the dimension label.
+        draw_crosshair(ctx, g);
         if let Some(vrect) = highlight {
             draw_label(ctx, g, vrect);
         }
@@ -440,7 +436,7 @@ struct Gdi {
 }
 
 impl Gdi {
-    fn new(frozen: &Frame, w: i32, h: i32, style: Style) -> Result<Gdi> {
+    fn new(frozen: &Frame, w: i32, h: i32) -> Result<Gdi> {
         // SAFETY: GDI object creation; failures are checked and the Drop impl cleans up.
         unsafe {
             let screen = windows::Win32::Graphics::Gdi::GetDC(None);
@@ -452,11 +448,7 @@ impl Gdi {
             let back_old = SelectObject(back_dc, HGDIOBJ(back_bmp.0));
             ReleaseDC(None, screen);
 
-            let border = match style {
-                Style::Classic => rgb(0, 180, 255),
-                Style::Crosshair => rgb(255, 0, 0),
-            };
-            let pen = CreatePen(PS_SOLID, 2, border);
+            let pen = CreatePen(PS_SOLID, 2, rgb(255, 0, 0));
             let line_brush = CreateSolidBrush(rgb(255, 255, 255));
             let edge_brush = CreateSolidBrush(rgb(0, 0, 0));
             let font = CreateFontW(

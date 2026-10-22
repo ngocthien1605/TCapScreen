@@ -161,7 +161,7 @@ fn select_target() -> Result<Option<CaptureTarget>> {
         },
     )?;
 
-    match overlay::select(&windows, &frozen, bbox, overlay::Style::Crosshair)? {
+    match overlay::select(&windows, &frozen, bbox)? {
         Outcome::Cancel => Ok(None),
         Outcome::Window(id) => Ok(Some(CaptureTarget::Window(id))),
         Outcome::Region(rect) => {
