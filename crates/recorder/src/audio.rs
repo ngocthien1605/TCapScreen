@@ -195,13 +195,62 @@ fn read_stereo(raw: &[u8], frame: usize, ch: usize, fmt: Fmt) -> (f32, f32) {
     }
 }
 
-/// One capture client plus its conversion state.
+/// One capture client plus its conversion state (its frames go into a parallel queue).
 struct Source {
     client: IAudioClient,
     capture: IAudioCaptureClient,
     fmt: Fmt,
-    queue: VecDeque<[f32; 2]>,
     resample_pos: f64,
+}
+
+/// After this many empty iterations, a starved source is treated as silent so it doesn't stall
+/// the other source (≈ STARVE_LIMIT × 5 ms). Keeps A/V aligned through a device hiccup.
+const STARVE_LIMIT: u32 = 10;
+
+/// Pure mixer step: emit one chunk if possible, summing all sources and substituting silence for
+/// any source that has starved past [`STARVE_LIMIT`]. Returns `None` when it should wait for more.
+fn mix_step(
+    queues: &mut [VecDeque<[f32; 2]>],
+    starved: &mut [u32],
+    chunk_frames: usize,
+) -> Option<Vec<i16>> {
+    if queues.is_empty() {
+        return None;
+    }
+    // A source with too little buffered blocks the emit — but only until it starves out.
+    let mut any_ready = false;
+    for (q, st) in queues.iter().zip(starved.iter_mut()) {
+        if q.len() >= chunk_frames {
+            any_ready = true;
+            *st = 0;
+        } else {
+            *st += 1;
+        }
+    }
+    if !any_ready {
+        return None;
+    }
+    for (q, st) in queues.iter().zip(starved.iter()) {
+        if q.len() < chunk_frames && *st < STARVE_LIMIT {
+            return None; // give the lagging source a little time to catch up
+        }
+    }
+
+    let mut chunk = vec![0i16; chunk_frames * CHANNELS];
+    let (pairs, _) = chunk.as_chunks_mut::<2>();
+    for slot in pairs.iter_mut() {
+        let mut l = 0.0f32;
+        let mut r = 0.0f32;
+        for q in queues.iter_mut() {
+            if let Some([sl, sr]) = q.pop_front() {
+                l += sl;
+                r += sr;
+            }
+        }
+        slot[0] = to_i16(l);
+        slot[1] = to_i16(r);
+    }
+    Some(chunk)
 }
 
 fn audio_thread(
@@ -245,6 +294,8 @@ fn audio_thread(
 
     let mut tone_phase: f32 = 0.0;
     let chunk_frames = RATE as usize / 100; // 10 ms
+    let mut queues: Vec<VecDeque<[f32; 2]>> = (0..sources.len()).map(|_| VecDeque::new()).collect();
+    let mut starved = vec![0u32; sources.len()];
 
     while !stop.load(Ordering::SeqCst) {
         // Service the render endpoint (silence keep-alive or test tone).
@@ -255,31 +306,14 @@ fn audio_thread(
             }
         }
 
-        // Drain each capture source into its queue.
-        for s in sources.iter_mut() {
+        // Drain each capture source into its parallel queue.
+        for (i, s) in sources.iter_mut().enumerate() {
             // SAFETY: drains all available packets from the capture client.
-            unsafe { drain_source(s) };
+            unsafe { drain_source(s, &mut queues[i]) };
         }
 
-        // Emit as many full chunks as every active source can supply (keeps them aligned).
-        loop {
-            let avail = sources.iter().map(|s| s.queue.len()).min().unwrap_or(0);
-            if avail < chunk_frames {
-                break;
-            }
-            let mut chunk = vec![0i16; chunk_frames * CHANNELS];
-            for f in 0..chunk_frames {
-                let mut l = 0.0f32;
-                let mut r = 0.0f32;
-                for s in sources.iter_mut() {
-                    if let Some([sl, sr]) = s.queue.pop_front() {
-                        l += sl;
-                        r += sr;
-                    }
-                }
-                chunk[f * 2] = to_i16(l);
-                chunk[f * 2 + 1] = to_i16(r);
-            }
+        // Emit as many aligned chunks as the sources can supply.
+        while let Some(chunk) = mix_step(&mut queues, &mut starved, chunk_frames) {
             if chunk_tx.send(chunk).is_err() {
                 return;
             }
@@ -338,7 +372,6 @@ unsafe fn setup(
                     client,
                     capture,
                     fmt,
-                    queue: VecDeque::new(),
                     resample_pos: 0.0,
                 });
             }
@@ -368,7 +401,6 @@ unsafe fn setup(
                             client,
                             capture,
                             fmt,
-                            queue: VecDeque::new(),
                             resample_pos: 0.0,
                         });
                     }
@@ -381,7 +413,7 @@ unsafe fn setup(
     }
 }
 
-unsafe fn drain_source(s: &mut Source) {
+unsafe fn drain_source(s: &mut Source, queue: &mut VecDeque<[f32; 2]>) {
     // SAFETY: standard capture-client packet drain.
     unsafe {
         loop {
@@ -406,17 +438,11 @@ unsafe fn drain_source(s: &mut Source) {
             if silent || data.is_null() {
                 // Push zeros so the sample clock keeps advancing.
                 for _ in 0..frames as usize {
-                    s.queue.push_back([0.0, 0.0]);
+                    queue.push_back([0.0, 0.0]);
                 }
             } else {
                 let raw = std::slice::from_raw_parts(data, frames as usize * frame_bytes);
-                convert_append(
-                    raw,
-                    frames as usize,
-                    s.fmt,
-                    &mut s.queue,
-                    &mut s.resample_pos,
-                );
+                convert_append(raw, frames as usize, s.fmt, queue, &mut s.resample_pos);
             }
             let _ = s.capture.ReleaseBuffer(frames);
         }
@@ -473,5 +499,53 @@ unsafe fn feed_render(
                 let _ = render.ReleaseBuffer(avail, 0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mix_step_sums_two_ready_sources() {
+        let mut q = vec![VecDeque::new(), VecDeque::new()];
+        for _ in 0..480 {
+            q[0].push_back([0.25, -0.25]);
+            q[1].push_back([0.25, 0.25]);
+        }
+        let mut starved = vec![0u32; 2];
+        let chunk = mix_step(&mut q, &mut starved, 480).expect("a chunk");
+        assert_eq!(chunk.len(), 480 * 2);
+        // 0.25 + 0.25 = 0.5 → ~16383 on the left channel.
+        assert!((chunk[0] as i32 - 16383).abs() < 4, "left {}", chunk[0]);
+        // -0.25 + 0.25 = 0 on the right.
+        assert_eq!(chunk[1], 0);
+        assert!(q[0].is_empty() && q[1].is_empty());
+    }
+
+    #[test]
+    fn mix_step_waits_then_pads_a_starved_source() {
+        let mut q = vec![VecDeque::new(), VecDeque::new()];
+        for _ in 0..480 {
+            q[0].push_back([0.5, 0.5]);
+        }
+        // q[1] is empty. While under the starve limit, we wait (no emit). The emit happens on
+        // the call where q[1]'s starvation counter reaches STARVE_LIMIT.
+        let mut starved = vec![0u32; 2];
+        for _ in 0..STARVE_LIMIT - 1 {
+            assert!(mix_step(&mut q, &mut starved, 480).is_none());
+        }
+        // Once q[1] has starved out, emit using q[0] with silence for q[1].
+        let chunk = mix_step(&mut q, &mut starved, 480).expect("chunk after starve");
+        assert_eq!(chunk.len(), 480 * 2);
+        assert!((chunk[0] as i32 - 16383).abs() < 4);
+    }
+
+    #[test]
+    fn mix_step_none_when_nothing_ready() {
+        let mut q = vec![VecDeque::new()];
+        let mut starved = vec![0u32; 1];
+        assert!(mix_step(&mut q, &mut starved, 480).is_none());
     }
 }
