@@ -55,6 +55,9 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
       open; "Restore default hotkeys" resets all six fields.
 - [ ] Hotkeys "Modify" button: capture dialog records the pressed combination (incl.
       `PrintScreen`), Alt-combos, and Cancel leaves the field unchanged; the overlay never opens
-      while the capture dialog is up.
+      while the capture dialog is up. (Quit other screenshot tools first — a global PrintScreen
+      hook in e.g. Screenpresso can swallow the key before RustShot's capture field sees it.)
+- [x] Settings + capture dialog templates render without error — auto-verified by
+      `rustshot dev settings-selftest` (both must report OK, not a `-1` result).
 - [ ] Run-at-startup toggle adds/removes the `Run` key (opt-in).
 - [ ] Installer produces a working Start-menu app on a clean Windows 11 VM; portable zip runs.

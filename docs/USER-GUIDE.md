@@ -76,8 +76,10 @@ Tray → **Settings…** opens a dialog for the common options (cursor capture, 
 microphone/system audio, run-at-startup, JPEG quality, video FPS, and the output folder).
 
 It also has a **Global hotkeys** section with an editable field for each of the six actions.
-Type a shortcut as `Modifier+…+Key` (for example `Ctrl+Shift+R`, or just `PrintScreen`); leave a
-field **blank** to turn that hotkey off. Supported modifiers are `Ctrl`, `Alt`, `Shift`, and
+Either click **Modify** next to a row and press the key combination you want (including
+`PrintScreen` and `Alt`/`Win` combos; Backspace clears it, Enter accepts, Esc cancels), or type
+a shortcut directly as `Modifier+…+Key` (for example `Ctrl+Shift+R`, or just `PrintScreen`);
+leave a field **blank** to turn that hotkey off. Supported modifiers are `Ctrl`, `Alt`, `Shift`, and
 `Win`; keys include letters, digits, `F1`–`F24`, and `PrintScreen`, `Escape`, `Enter`, `Space`,
 `Delete`, `Insert`, `PageUp`, `PageDown`. **Restore default hotkeys** resets all six to the
 table above. On **OK**, an invalid shortcut or two actions sharing the same combination are

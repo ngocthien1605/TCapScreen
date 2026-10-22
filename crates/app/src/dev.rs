@@ -94,6 +94,8 @@ pub enum DevCmd {
         resume_at: u64,
         out: PathBuf,
     },
+    /// Render the Settings dialog with defaults and auto-close it (smoke-tests the template).
+    SettingsSelftest,
 }
 
 pub fn run(cmd: DevCmd) -> ExitCode {
@@ -140,6 +142,21 @@ pub fn run(cmd: DevCmd) -> ExitCode {
             resume_at,
             out,
         } => cmd_record_pause_test(index, seconds, pause_at, resume_at, out),
+        DevCmd::SettingsSelftest => cmd_settings_selftest(),
+    }
+}
+
+fn cmd_settings_selftest() -> ExitCode {
+    let main_ret = crate::settings_ui::selftest();
+    let cap_ret = crate::settings_ui::capture_selftest();
+    if main_ret == -1 || cap_ret == -1 {
+        eprintln!("dialog render FAILED (settings = {main_ret}, capture = {cap_ret})");
+        ExitCode::FAILURE
+    } else {
+        println!(
+            "settings dialog OK (result = {main_ret}); capture dialog OK (result = {cap_ret})"
+        );
+        ExitCode::SUCCESS
     }
 }
 
