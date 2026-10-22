@@ -14,6 +14,8 @@ use thiserror::Error;
 #[cfg(windows)]
 mod audio;
 #[cfg(windows)]
+mod gif;
+#[cfg(windows)]
 mod mf;
 #[cfg(windows)]
 mod pipeline;
@@ -76,11 +78,41 @@ pub fn even_dims(width: u32, height: u32) -> (u32, u32) {
     (width & !1, height & !1)
 }
 
+/// The active recording backend (MP4 video or animated GIF).
+#[cfg(windows)]
+#[derive(Debug)]
+enum Backend {
+    Video(pipeline::Session),
+    Gif(gif::GifSession),
+}
+
+#[cfg(windows)]
+impl Backend {
+    fn set_paused(&self, v: bool) {
+        match self {
+            Backend::Video(s) => s.set_paused(v),
+            Backend::Gif(s) => s.set_paused(v),
+        }
+    }
+    fn is_paused(&self) -> bool {
+        match self {
+            Backend::Video(s) => s.is_paused(),
+            Backend::Gif(s) => s.is_paused(),
+        }
+    }
+    fn stop(self) -> Result<PathBuf> {
+        match self {
+            Backend::Video(s) => s.stop(),
+            Backend::Gif(s) => s.stop(),
+        }
+    }
+}
+
 /// Handle to an in-progress recording. Dropping it stops and finalizes a playable file.
 #[derive(Debug)]
 pub struct RecorderHandle {
     #[cfg(windows)]
-    inner: Option<pipeline::Session>,
+    inner: Option<Backend>,
     out_path: PathBuf,
 }
 
@@ -145,24 +177,22 @@ impl Recorder {
 
     /// Begin a recording. Returns a handle for pause/resume/stop.
     pub fn start(&self, cfg: RecordCfg) -> Result<RecorderHandle> {
-        match cfg.output {
-            RecordOutput::Gif { .. } => Err(RecorderError::NotImplemented), // M5
-            RecordOutput::Mp4 { .. } => {
-                #[cfg(windows)]
-                {
-                    let out_path = cfg.out_path.clone();
-                    let inner = pipeline::Session::start(cfg)?;
-                    Ok(RecorderHandle {
-                        inner: Some(inner),
-                        out_path,
-                    })
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = cfg;
-                    Err(RecorderError::NotImplemented)
-                }
-            }
+        #[cfg(windows)]
+        {
+            let out_path = cfg.out_path.clone();
+            let backend = match cfg.output {
+                RecordOutput::Mp4 { .. } => Backend::Video(pipeline::Session::start(cfg)?),
+                RecordOutput::Gif { .. } => Backend::Gif(gif::GifSession::start(cfg)?),
+            };
+            Ok(RecorderHandle {
+                inner: Some(backend),
+                out_path,
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = cfg;
+            Err(RecorderError::NotImplemented)
         }
     }
 }
@@ -181,9 +211,9 @@ mod tests {
     }
 
     #[test]
-    fn gif_output_is_not_yet_implemented() {
-        let r = Recorder::new();
-        let cfg = RecordCfg {
+    fn record_output_variants_construct() {
+        // Both outputs are representable; starting them needs a display (covered by dev tests).
+        let gif = RecordCfg {
             target: CaptureTarget::Monitor(MonitorId(0)),
             output: RecordOutput::Gif {
                 fps: 15,
@@ -193,6 +223,6 @@ mod tests {
             },
             out_path: PathBuf::from("out.gif"),
         };
-        assert!(matches!(r.start(cfg), Err(RecorderError::NotImplemented)));
+        assert!(matches!(gif.output, RecordOutput::Gif { fps: 15, .. }));
     }
 }

@@ -18,6 +18,42 @@ pub fn load_rgba(path: &Path) -> Result<RgbaImage, ImagingError> {
     Ok(image::open(path)?.to_rgba8())
 }
 
+/// Decode a GIF and report (width, height, frame count) — used to verify GIF output.
+pub fn probe_gif(path: &Path) -> Result<(u32, u32, usize), ImagingError> {
+    use image::codecs::gif::GifDecoder;
+    use image::AnimationDecoder;
+
+    let file = std::fs::File::open(path).map_err(|source| ImagingError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let decoder = GifDecoder::new(std::io::BufReader::new(file))?;
+    let frames = decoder.into_frames().collect_frames()?;
+    let (w, h) = match frames.first() {
+        Some(f) => (f.buffer().width(), f.buffer().height()),
+        None => (0, 0),
+    };
+    Ok((w, h, frames.len()))
+}
+
+/// Encode a sequence of RGBA frames as an animated, looping GIF at `fps` frames per second.
+pub fn save_gif(frames: &[RgbaImage], fps: u32, path: &Path) -> Result<(), ImagingError> {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    use image::{Delay, Frame};
+
+    let file = std::fs::File::create(path).map_err(|source| ImagingError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut encoder = GifEncoder::new_with_speed(std::io::BufWriter::new(file), 15);
+    encoder.set_repeat(Repeat::Infinite)?;
+    let delay = Delay::from_numer_denom_ms(1000, fps.max(1));
+    for img in frames {
+        encoder.encode_frame(Frame::from_parts(img.clone(), 0, 0, delay))?;
+    }
+    Ok(())
+}
+
 /// Errors from imaging operations.
 #[derive(Debug, Error)]
 pub enum ImagingError {

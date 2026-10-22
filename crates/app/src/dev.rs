@@ -66,6 +66,12 @@ pub enum DevCmd {
         /// The .mp4 file to probe.
         file: PathBuf,
     },
+    /// Record a monitor to an animated GIF for N seconds, then report its dimensions/frames.
+    RecordGif {
+        index: usize,
+        seconds: u64,
+        out: PathBuf,
+    },
     /// Record a monitor with system audio while rendering a 1 kHz tone (tests the audio path).
     RecordAudioTest {
         index: usize,
@@ -111,6 +117,11 @@ pub fn run(cmd: DevCmd) -> ExitCode {
             out,
         } => cmd_record_monitor(index, seconds, out),
         DevCmd::ProbeMp4 { file } => cmd_probe_mp4(file),
+        DevCmd::RecordGif {
+            index,
+            seconds,
+            out,
+        } => cmd_record_gif(index, seconds, out),
         DevCmd::RecordAudioTest {
             index,
             seconds,
@@ -275,6 +286,62 @@ fn cmd_probe_mp4(file: PathBuf) -> ExitCode {
         }
         Err(e) => {
             eprintln!("probe failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_record_gif(index: usize, seconds: u64, out: PathBuf) -> ExitCode {
+    let backend = match WindowsBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mons = match backend.monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(mon) = mons.get(index) else {
+        eprintln!("no monitor at index {index}");
+        return ExitCode::FAILURE;
+    };
+    let cfg = recorder::RecordCfg {
+        target: CaptureTarget::Monitor(mon.id),
+        output: recorder::RecordOutput::Gif {
+            fps: 15,
+            cursor: false,
+            max_width: 640,
+            max_seconds: seconds.max(1) as u32,
+        },
+        out_path: out.clone(),
+    };
+    let handle = match recorder::Recorder::new().start(cfg) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("start failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("recording {seconds}s GIF → {}", out.display());
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    match handle.stop() {
+        Ok(p) => match imaging::probe_gif(&p) {
+            Ok((w, h, frames)) => {
+                println!("saved {} — {}x{}, {} frames", p.display(), w, h, frames);
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("gif probe failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("stop failed: {e}");
             ExitCode::FAILURE
         }
     }

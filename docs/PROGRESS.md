@@ -131,9 +131,28 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 - 🔬 **Microphone capture and mic+system mixing need a live mic signal**, and A/V lip-sync by
   ear is inherently manual (QA-CHECKLIST M4). The system path proves capture→mix→AAC→mux→decode.
 
-## M5 — GIF  ⬜ Next.
+## M5 — GIF  ✅ (verified: capture → downscale → encode → decode)
 
-## M6–M7  ⬜ Not started.
+| Item | Status | How verified |
+|---|---|---|
+| GIF capture via WGC stream, bounded by fps × max_seconds | ✅ | `record-gif 0 3` → 14 frames at 15 fps |
+| Downscale to `gif_max_width` (longer edge, aspect preserved, no upscale) | ✅ | 1920×1080 → **640×360** |
+| Animated looping GIF encode (`image` crate) | ✅ | `imaging::probe_gif` decoded 14 frames |
+| Length cap (`gif_max_seconds`) and fps clamp (≤50) enforced | ✅ | frame-count bound in the loop; clamp in code |
+| Shares the recorder handle (pause/stop) via a `Backend` enum | ✅ | builds; same handle API |
+| Tray "Record GIF (region/window)" wired | ✅ (code) | tray item → `RecordGif` → overlay target select |
+
+**Gate (all green):** build ✅ · clippy -D warnings ✅ · fmt ✅ · **70 unit tests pass**.
+
+**Done-when (M5):** a short recording exports an optimised, browser-openable GIF.
+- ✅ **verified live**: `dev record-gif 0 3 clip.gif` → **640×360, 14 frames**, re-decoded by an
+  independent `GifDecoder` (valid animated GIF). Caps are enforced by construction.
+- 🔬 Visual quality / palette optimisation and opening in a browser are a quick manual check
+  (QA-CHECKLIST M5).
+
+## M6 — Polish (settings UI, run-at-startup, manifest, USER-GUIDE)  ⬜ Next.
+
+## M7 — Installer / packaging  ⬜ Not started.
 
 ---
 

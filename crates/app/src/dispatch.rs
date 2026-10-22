@@ -44,6 +44,7 @@ pub enum Action {
     FlyoutDismiss,
     ExecuteRecordStart,
     RecordPauseToggle,
+    RecordGif,
 }
 
 impl Action {
@@ -68,6 +69,7 @@ impl Action {
             16 => FlyoutDismiss,
             17 => ExecuteRecordStart,
             18 => RecordPauseToggle,
+            19 => RecordGif,
             _ => return None,
         })
     }
@@ -182,7 +184,8 @@ fn handle(action: Action) {
         ShotMonitor => capture_flow::begin(capture_flow::ShotKind::Monitor),
         ShotAllMonitors => capture_flow::begin(capture_flow::ShotKind::AllMonitors),
         ExecuteDelayedShot => capture_flow::execute_pending(),
-        RecordRegion => crate::record_flow::begin(),
+        RecordRegion => crate::record_flow::begin(false),
+        RecordGif => crate::record_flow::begin(true),
         ExecuteRecordStart => crate::record_flow::execute_start(),
         RecordPauseToggle => crate::record_flow::toggle_pause(),
         StopRecording => crate::record_flow::stop(),

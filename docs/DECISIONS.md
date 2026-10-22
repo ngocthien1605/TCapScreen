@@ -156,3 +156,17 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 - **Verification by signal, not ears** (`dev record-audio-test` + extended `probe-mp4`): decode
   the audio stream and assert RMS > 0.1 (present, not silence) and a zero-crossing dominant
   frequency near the rendered tone. Lip-sync by ear and live mic input remain manual QA.
+
+## M5 — GIF
+
+- **Reuse the WGC `CaptureStream`, encode with the `image` crate.** A separate `gif::GifSession`
+  (mirroring the video `Session` API) captures frames, downscales each with
+  `imaging::thumbnail` (longer edge → `gif_max_width`, never upscaling), and encodes a looping
+  GIF via `image`'s `GifEncoder`. The `image` dependency gains the `gif` feature.
+- **Bounded in memory.** Capture stops at `gif_fps × gif_max_seconds` frames, so the in-RAM
+  frame buffer is small (e.g. 15 fps × 30 s = 450 downscaled frames) — no streaming GIF encoder
+  needed.
+- **One handle, two backends.** `RecorderHandle` wraps a `Backend::{Video, Gif}` enum so GIF and
+  MP4 share pause/stop and the same `record_flow` UX; the tray offers both.
+- **Verified by re-decoding** (`imaging::probe_gif` with an independent `GifDecoder`): a live
+  capture produced a 640×360, 14-frame animated GIF from a 1080p monitor.

@@ -29,10 +29,11 @@ pub fn build(dispatch_hwnd: HWND) -> Result<TrayIcon> {
         .append_items(&[&shot_region, &shot_window, &shot_monitor, &shot_all])
         .context("building Screenshot submenu")?;
 
-    let rec_region = MenuItem::new("Record — Region (M3)", true, None);
+    let rec_region = MenuItem::new("Record video (region/window)", true, None);
+    let rec_gif = MenuItem::new("Record GIF (region/window)", true, None);
     let record_menu = Submenu::new("Record", true);
     record_menu
-        .append_items(&[&rec_region])
+        .append_items(&[&rec_region, &rec_gif])
         .context("building Record submenu")?;
 
     let open_folder = MenuItem::new("Open output folder", true, None);
@@ -57,6 +58,7 @@ pub fn build(dispatch_hwnd: HWND) -> Result<TrayIcon> {
             (shot_monitor.id().clone(), Action::ShotMonitor),
             (shot_all.id().clone(), Action::ShotAllMonitors),
             (rec_region.id().clone(), Action::RecordRegion),
+            (rec_gif.id().clone(), Action::RecordGif),
             (open_folder.id().clone(), Action::OpenFolder),
             (settings.id().clone(), Action::Settings),
             (quit.id().clone(), Action::Quit),

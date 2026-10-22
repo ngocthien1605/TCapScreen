@@ -16,8 +16,9 @@ use crate::dispatch::{self, Action};
 use crate::overlay::{self, Outcome};
 use crate::recording::{Recording, Toolbar};
 
-/// Begin a recording: pick a target, queue it behind the countdown, then start.
-pub fn begin() {
+/// Begin a recording: pick a target, queue it behind the countdown, then start. `gif` selects
+/// animated-GIF output instead of MP4.
+pub fn begin(gif: bool) {
     let already = dispatch::with_app(|a| a.recording.is_some() || a.busy).unwrap_or(true);
     if already {
         tracing::info!("a capture or recording is already in progress; ignoring");
@@ -46,11 +47,18 @@ pub fn begin() {
         return;
     };
 
-    let name = imaging::auto_name(imaging::Timestamp::now_local(), "mp4");
+    let ext = if gif { "gif" } else { "mp4" };
+    let name = imaging::auto_name(imaging::Timestamp::now_local(), ext);
     let path = imaging::unique_path(&out_dir, &name);
-    let cfg = RecordCfg {
-        target,
-        output: RecordOutput::Mp4 {
+    let output = if gif {
+        RecordOutput::Gif {
+            fps: settings.recording.gif_fps,
+            cursor: settings.recording.include_cursor,
+            max_width: settings.recording.gif_max_width,
+            max_seconds: settings.recording.gif_max_seconds,
+        }
+    } else {
+        RecordOutput::Mp4 {
             fps: settings.recording.fps,
             bitrate: settings.recording.bitrate,
             audio: AudioCfg {
@@ -59,7 +67,11 @@ pub fn begin() {
                 microphone_device: settings.recording.microphone_device.clone(),
             },
             cursor: settings.recording.include_cursor,
-        },
+        }
+    };
+    let cfg = RecordCfg {
+        target,
+        output,
         out_path: path,
     };
 
