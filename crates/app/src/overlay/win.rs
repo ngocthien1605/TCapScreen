@@ -27,10 +27,11 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU, IDC_CROSS, MSG,
-    SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU,
+    IDC_CROSS, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 use super::state::{label_position, Outcome, SelectionState};
@@ -98,16 +99,29 @@ pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect) -> Result<Outc
         // `ctx.done` is set from the window proc during `DispatchMessageW` (via the raw pointer),
         // which clippy can't see — hence a `loop` with the check after dispatch, not a `while`.
         let mut msg = MSG::default();
+        let mut got_quit = false;
         loop {
             let r = GetMessageW(&mut msg, None, 0, 0);
-            if r.0 <= 0 {
+            if r.0 == 0 {
+                got_quit = true; // WM_QUIT: the whole app is shutting down
                 break;
+            }
+            if r.0 == -1 {
+                break; // error
             }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
             if ctx.done {
                 break;
             }
+        }
+        // If a quit/error interrupted us, the window is still alive with a GWLP_USERDATA pointer
+        // into `ctx` (about to drop). Destroy it now, then re-post the quit for the outer loop.
+        if !ctx.done {
+            let _ = DestroyWindow(hwnd);
+        }
+        if got_quit {
+            PostQuitMessage(0);
         }
     }
 

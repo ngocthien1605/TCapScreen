@@ -86,6 +86,16 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-22: M2 hardening (post-review). Fixed: (1) flyout/OpenFolder shell+clipboard work now
+  runs *outside* the `AppState` borrow (ShellExecuteW can pump messages and re-enter dispatch —
+  would have been a `BorrowMutError` panic in a wndproc); (2) overlay nested loop now destroys
+  its window and re-posts `WM_QUIT` if a quit/err interrupts it (no dangling `GWLP_USERDATA`);
+  (3) `dev` commands now init COM **STA** to mirror the tray app. Checks: WGC capture works
+  from STA (`grab-all` OK); a non-maximized window captured at exactly its frame-bounds size
+  (1235×628 — no resize-border inflation, so no extra crop needed) **and** exercised the
+  stride-padding path on real hardware (stride 4992 ≠ width×4 4940). Confirmed the four
+  PrintScreen combos are held by **Screenpresso** (PID 1108), which is running on this box —
+  the graceful degradation worked as designed.
 - 2026-10-22: M2 gate green (build/clippy -D warnings/fmt/test: **69 tests pass**). Live:
   `dev list-windows` (5 windows), `grab-all` (1920×1080), `grab-region 100 100 640 480`
   (640×480), `grab-window Brave` (1920×1032 JPEG); scripted System.Drawing check confirmed

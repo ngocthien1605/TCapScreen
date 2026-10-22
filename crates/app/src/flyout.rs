@@ -116,54 +116,26 @@ impl Flyout {
         })
     }
 
-    /// Open the saved image with its default viewer.
-    pub fn action_open(&self) {
-        let file = HSTRING::from(self._inner.path.as_os_str());
-        // SAFETY: ShellExecuteW with valid wide strings; result handle is advisory only.
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(file.as_ptr()),
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SW_SHOWNORMAL,
-            );
-        }
+    /// The saved file this flyout represents.
+    pub fn path(&self) -> &Path {
+        &self._inner.path
     }
+}
 
-    /// Open Explorer with the saved file selected.
-    pub fn action_open_folder(&self) {
-        select_in_explorer(&self._inner.path);
-    }
-
-    /// Copy the saved image to the clipboard (re-read from disk at full resolution).
-    pub fn action_copy(&self) {
-        match imaging::load_rgba(&self._inner.path) {
-            Ok(img) => {
-                if let Err(e) = crate::clipboard::copy_image(&img) {
-                    tracing::warn!("flyout copy failed: {e:#}");
-                }
-            }
-            Err(e) => tracing::warn!("could not reload image for copy: {e:#}"),
-        }
-    }
-
-    /// Copy the saved file's path to the clipboard.
-    pub fn action_copy_path(&self) {
-        let s = self._inner.path.to_string_lossy().to_string();
-        if let Err(e) = crate::clipboard::copy_text(&s) {
-            tracing::warn!("flyout copy-path failed: {e:#}");
-        }
-    }
-
-    /// Delete the saved file. The flyout is removed by the caller (which owns it).
-    pub fn action_delete(&self) {
-        if let Err(e) = std::fs::remove_file(&self._inner.path) {
-            tracing::warn!("could not delete {}: {e}", self._inner.path.display());
-        } else {
-            tracing::info!("deleted {}", self._inner.path.display());
-        }
+/// Open an image file with its default viewer. Free function so it runs *outside* any
+/// `AppState` borrow (`ShellExecuteW` can pump messages and re-enter the dispatch loop).
+pub fn shell_open(file: &Path) {
+    let wide = HSTRING::from(file.as_os_str());
+    // SAFETY: ShellExecuteW with valid wide strings; the returned handle is advisory only.
+    unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
     }
 }
 
@@ -187,7 +159,8 @@ pub fn open_in_explorer(path: &Path) {
     }
 }
 
-fn select_in_explorer(file: &Path) {
+/// Open Explorer with `file` selected (used by the flyout's Folder button).
+pub fn select_in_explorer(file: &Path) {
     // `explorer /select,<path>` opens the folder with the file highlighted.
     if let Err(e) = std::process::Command::new("explorer")
         .arg(format!("/select,{}", file.display()))

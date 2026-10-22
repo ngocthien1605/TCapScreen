@@ -179,7 +179,10 @@ fn handle(action: Action) {
             tracing::info!("Stop recording selected (recording pipeline lands in M3)");
         }
         OpenFolder => {
-            with_app(|app| flyout::open_in_explorer(&app.output_folder));
+            // Clone the path out, then shell out *outside* the borrow (explorer can pump).
+            if let Some(folder) = with_app(|app| app.output_folder.clone()) {
+                flyout::open_in_explorer(&folder);
+            }
         }
         Settings => {
             tracing::info!("Settings selected (settings UI lands in M6)");
@@ -189,16 +192,48 @@ fn handle(action: Action) {
             // SAFETY: posts WM_QUIT to this (UI) thread's queue.
             unsafe { PostQuitMessage(0) };
         }
-        FlyoutOpen => with_flyout(|f| f.action_open()),
-        FlyoutOpenFolder => with_flyout(|f| f.action_open_folder()),
-        FlyoutCopy => with_flyout(|f| f.action_copy()),
-        FlyoutCopyPath => with_flyout(|f| f.action_copy_path()),
-        FlyoutDelete => {
-            with_app(|app| {
-                if let Some(f) = app.flyout.take() {
-                    f.action_delete();
+        // For every flyout action we copy the path out under a short borrow, release it, and
+        // only then run shell/clipboard work — which can pump messages and re-enter `handle`,
+        // and must not find the `RefCell` still borrowed (that would panic in a wndproc).
+        FlyoutOpen => {
+            if let Some(p) = flyout_path() {
+                flyout::shell_open(&p);
+            }
+        }
+        FlyoutOpenFolder => {
+            if let Some(p) = flyout_path() {
+                flyout::select_in_explorer(&p);
+            }
+        }
+        FlyoutCopy => {
+            if let Some(p) = flyout_path() {
+                match imaging::load_rgba(&p) {
+                    Ok(img) => {
+                        if let Err(e) = crate::clipboard::copy_image(&img) {
+                            tracing::warn!("flyout copy failed: {e:#}");
+                        }
+                    }
+                    Err(e) => tracing::warn!("could not reload image for copy: {e:#}"),
                 }
-            });
+            }
+        }
+        FlyoutCopyPath => {
+            if let Some(p) = flyout_path() {
+                if let Err(e) = crate::clipboard::copy_text(&p.to_string_lossy()) {
+                    tracing::warn!("flyout copy-path failed: {e:#}");
+                }
+            }
+        }
+        FlyoutDelete => {
+            // Take the flyout out (dropping it destroys the window), then delete the file.
+            if let Some(f) = with_app(|app| app.flyout.take()).flatten() {
+                let path = f.path().to_owned();
+                drop(f);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => tracing::info!("deleted {}", path.display()),
+                    Err(e) => tracing::warn!("could not delete {}: {e}", path.display()),
+                }
+            }
         }
         FlyoutDismiss => {
             with_app(|app| {
@@ -208,10 +243,7 @@ fn handle(action: Action) {
     }
 }
 
-fn with_flyout(f: impl FnOnce(&Flyout)) {
-    with_app(|app| {
-        if let Some(fl) = app.flyout.as_ref() {
-            f(fl);
-        }
-    });
+/// The current flyout's saved path, copied out under a short borrow (released before use).
+fn flyout_path() -> Option<PathBuf> {
+    with_app(|app| app.flyout.as_ref().map(|f| f.path().to_owned())).flatten()
 }

@@ -137,7 +137,7 @@ fn start() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_com_sta() {
+pub(crate) fn init_com_sta() {
     // SAFETY: initialises COM for this thread; tolerate an already-initialised apartment.
     unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);

@@ -55,6 +55,9 @@ pub enum DevCmd {
 }
 
 pub fn run(cmd: DevCmd) -> ExitCode {
+    // Mirror the tray app's apartment (STA) so the dev commands exercise the same COM/WGC path
+    // the real app uses. The capture backend's RoInitialize(MTA) attempt is tolerated.
+    crate::init_com_sta();
     match cmd {
         DevCmd::Config => cmd_config(),
         DevCmd::Paths => cmd_paths(),
