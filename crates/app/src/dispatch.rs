@@ -42,6 +42,8 @@ pub enum Action {
     FlyoutCopyPath,
     FlyoutDelete,
     FlyoutDismiss,
+    ExecuteRecordStart,
+    RecordPauseToggle,
 }
 
 impl Action {
@@ -64,6 +66,8 @@ impl Action {
             14 => FlyoutCopyPath,
             15 => FlyoutDelete,
             16 => FlyoutDismiss,
+            17 => ExecuteRecordStart,
+            18 => RecordPauseToggle,
             _ => return None,
         })
     }
@@ -94,6 +98,10 @@ pub struct AppState {
     pub flyout: Option<Flyout>,
     /// The shot kind queued behind the delay timer.
     pub pending_shot: Option<capture_flow::ShotKind>,
+    /// The in-progress recording (handle + toolbar), if any.
+    pub recording: Option<crate::recording::Recording>,
+    /// A recording request queued behind the countdown.
+    pub pending_record: Option<recorder::RecordCfg>,
 }
 
 thread_local! {
@@ -145,6 +153,8 @@ pub fn create(settings: Settings, output_folder: PathBuf) -> Result<HWND> {
             busy: false,
             flyout: None,
             pending_shot: None,
+            recording: None,
+            pending_record: None,
         });
     });
 
@@ -172,12 +182,10 @@ fn handle(action: Action) {
         ShotMonitor => capture_flow::begin(capture_flow::ShotKind::Monitor),
         ShotAllMonitors => capture_flow::begin(capture_flow::ShotKind::AllMonitors),
         ExecuteDelayedShot => capture_flow::execute_pending(),
-        RecordRegion => {
-            tracing::info!("Record — Region selected (recording pipeline lands in M3)");
-        }
-        StopRecording => {
-            tracing::info!("Stop recording selected (recording pipeline lands in M3)");
-        }
+        RecordRegion => crate::record_flow::begin(),
+        ExecuteRecordStart => crate::record_flow::execute_start(),
+        RecordPauseToggle => crate::record_flow::toggle_pause(),
+        StopRecording => crate::record_flow::stop(),
         OpenFolder => {
             // Clone the path out, then shell out *outside* the borrow (explorer can pump).
             if let Some(folder) = with_app(|app| app.output_folder.clone()) {

@@ -98,3 +98,36 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 - **Flyout is Win32, non-modal, StretchDIBits thumbnail.** It stores a heap-stable `Box` so its
   window proc can reach it by pointer; buttons post `Flyout*` actions back through the dispatch
   window, keeping all mutation on the UI thread.
+
+## M3 — Recording (MP4, video-only)
+
+- **Raw `IMFSinkWriter`, not `windows-capture`.** The decisive constraint is M4: the muxer must
+  accept an AAC audio stream beside the video. `IMFSinkWriter::AddStream` does that natively, so
+  starting here avoids a rewrite when audio lands. Input type is `MFVideoFormat_RGB32` (== our
+  BGRA) and the SinkWriter inserts the color converter to NV12 for the H.264 encoder.
+- **Continuous capture lives in `capture-core` (`CaptureStream`)**, reusing the M1 D3D device
+  and the extracted `wgc::frame_to_cpu` helper; `recorder` owns only the MF encode + pacing.
+  The staging copy runs on the WGC pool threads behind a `Mutex<D3dDevice>` (the D3D immediate
+  context is not thread-safe).
+- **CFR re-emission on the monotonic clock.** WGC sends nothing while the screen is static, so a
+  write-on-arrival file would freeze/jump. A dedicated encoder thread keeps the latest frame and,
+  each iteration, writes enough copies to make the emitted frame count equal
+  `active_elapsed / frame_dur`. This both fixes static-screen smoothness and makes the output's
+  duration track real time instead of drifting with `sleep` latency (an early sleep-per-frame
+  version produced a 3 s file for a 4 s recording — ~33 % fast).
+- **Pause = stop the clock.** Paused wall-time is subtracted from `active_elapsed`, so the index
+  doesn't advance and the output simply omits the paused span; resume continues seamlessly.
+- **Even dimensions + top-down stride.** H.264 rejects odd width/height, so dims are rounded down
+  to even from the first captured frame. `MF_MT_DEFAULT_STRIDE` is set **positive** (`w*4`) to
+  declare top-down data — verified by decoding frame 0 and confirming it isn't vertically
+  flipped versus a live grab (the advisor flagged this as "verify, don't trust").
+- **Finalize-on-drop.** Without `IMFSinkWriter::Finalize` there is no `moov` box and the file is
+  unplayable, so `RecorderHandle::drop` (and `stop`) always finalize.
+- **Encoder thread apartment is MTA** (`CoInitializeEx(MULTITHREADED)`), satisfying both Media
+  Foundation and the WinRT WGC projections; the UI thread stays STA.
+- **Verification via `IMFSourceReader`** (`dev probe-mp4`): it is the same decode stack Windows
+  Media Player uses, so a successful decode + frame-0 PNG is the headless proxy for "plays in a
+  real player" (actual VLC/WMP playback stays a manual-QA item).
+- **Toolbar/countdown reuse the flyout window pattern** (small topmost Win32 tool window,
+  `SetTimer` ticks, buttons post `Record*`/`StopRecording` actions). `AppState` gains
+  `recording: Option<Recording>` and `pending_record`.

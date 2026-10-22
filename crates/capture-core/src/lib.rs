@@ -11,6 +11,8 @@ pub mod platform;
 #[cfg(windows)]
 pub mod win;
 #[cfg(windows)]
+pub use win::stream::{CaptureStream, StreamEvent};
+#[cfg(windows)]
 pub use win::WindowsBackend;
 
 pub use geometry::{

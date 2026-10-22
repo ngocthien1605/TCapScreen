@@ -79,9 +79,36 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
   window highlight, and the five flyout buttons is a manual-QA item (QA-CHECKLIST M2).
 - 🔬 Mixed-DPI multi-monitor behaviour still needs a suitable rig (single 100% display here).
 
-## M3 — Recording (MP4)  ⬜ Next.
+## M3 — Recording (MP4)  ✅ (engine verified end-to-end; toolbar UI = manual QA)
 
-## M4–M7  ⬜ Not started.
+| Item | Status | How verified |
+|---|---|---|
+| Continuous WGC stream (`CaptureStream`): multi-buffer pool, FrameArrived→channel, Closed event | ✅ | live 4–5 s recordings |
+| Media Foundation `IMFSinkWriter` H.264/MP4, RGB32 in (auto NV12 convert) | ✅ | `probe-mp4` decodes it |
+| CFR re-emission driven by the monotonic clock (static screen stays smooth) | ✅ | 5 s → 140 samples, last_ts 4.63 s ≈ 30 fps, correct speed |
+| Even-dimension rounding (H.264 rejects odd) | ✅ | 1 unit test + odd window sizes |
+| Top-down orientation (positive input stride) | ✅ | frame-0 vs live grab: top bright in both (not flipped) |
+| Finalize-on-drop / on-stop (writes `moov`) | ✅ | files play/decode; Drop calls stop() |
+| Dropped/coalesced-frame logging | ✅ | log line (captured vs emitted) |
+| Pause/resume (clock stops; output excludes paused time) | ✅ (code) | atomics + toolbar; interactive = 🔬 |
+| Region/window/monitor targets | ✅ | monitor via `dev record-monitor`; region/window via overlay target-select |
+| Source-closed → stop + finalize | ✅ (code) | WGC `Closed` event path; QA item for the live case |
+| Countdown + compact always-on-top toolbar (elapsed + Pause/Stop) | 🔬 | compiles + clippy-clean; **visual → manual QA** |
+| `dev record-monitor` / `dev probe-mp4` functional tests | ✅ | see log |
+
+**Gate (all green):** build ✅ · clippy -D warnings ✅ · fmt ✅ · **70 unit tests pass**.
+
+**Done-when (M3):** a monitor recording produces a correct, playable MP4.
+- ✅ **verified live**: `dev record-monitor 0 5 rec.mp4` → 2 MB MP4; `dev probe-mp4` (MF
+  `IMFSourceReader`, the same decode stack as Windows Media Player) decoded **140 samples at
+  1920×1080**, duration 4.63 s (correct 30 fps speed after the pacing fix), and frame 0 matched
+  a live grab in size, content (stddev ≈ 81), and orientation (not flipped).
+- 🔬 **Actual playback in VLC/WMP, and the interactive countdown/toolbar/pause buttons, are
+  visual and remain manual QA** (QA-CHECKLIST M3). SourceReader decoding is the headless proxy.
+
+## M4 — Audio  ⬜ Next.
+
+## M5–M7  ⬜ Not started.
 
 ---
 

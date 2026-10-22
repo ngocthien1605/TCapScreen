@@ -15,6 +15,8 @@ mod hotkeys;
 mod icon;
 mod logging;
 mod overlay;
+mod record_flow;
+mod recording;
 mod single_instance;
 mod tray;
 

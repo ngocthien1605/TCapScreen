@@ -52,6 +52,20 @@ pub enum DevCmd {
         /// Image file to copy.
         file: PathBuf,
     },
+    /// Record a monitor to an MP4 for N seconds (functional test of the recorder).
+    RecordMonitor {
+        /// Monitor index as reported by `list-monitors`.
+        index: usize,
+        /// Recording length in seconds.
+        seconds: u64,
+        /// Output .mp4 path.
+        out: PathBuf,
+    },
+    /// Decode an MP4 back with Media Foundation and report size/sample-count (+ frame-0 PNG).
+    ProbeMp4 {
+        /// The .mp4 file to probe.
+        file: PathBuf,
+    },
 }
 
 pub fn run(cmd: DevCmd) -> ExitCode {
@@ -74,6 +88,88 @@ pub fn run(cmd: DevCmd) -> ExitCode {
         } => cmd_grab_region(Rect::new(x, y, width, height), out),
         DevCmd::GrabAll { out } => cmd_grab_all(out),
         DevCmd::ClipboardImage { file } => cmd_clipboard_image(file),
+        DevCmd::RecordMonitor {
+            index,
+            seconds,
+            out,
+        } => cmd_record_monitor(index, seconds, out),
+        DevCmd::ProbeMp4 { file } => cmd_probe_mp4(file),
+    }
+}
+
+fn cmd_record_monitor(index: usize, seconds: u64, out: PathBuf) -> ExitCode {
+    let backend = match WindowsBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mons = match backend.monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error enumerating monitors: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(mon) = mons.get(index) else {
+        eprintln!("no monitor at index {index} (found {})", mons.len());
+        return ExitCode::FAILURE;
+    };
+
+    let cfg = recorder::RecordCfg {
+        target: CaptureTarget::Monitor(mon.id),
+        output: recorder::RecordOutput::Mp4 {
+            fps: 30,
+            bitrate: 8_000_000,
+            audio: recorder::AudioCfg::default(),
+            cursor: false,
+        },
+        out_path: out.clone(),
+    };
+    let rec = recorder::Recorder::new();
+    let handle = match rec.start(cfg) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("could not start recording: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "recording {seconds}s of monitor {index} to {}…",
+        out.display()
+    );
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    match handle.stop() {
+        Ok(path) => {
+            println!("saved recording to {}", path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("recording failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_probe_mp4(file: PathBuf) -> ExitCode {
+    let png = file.with_extension("frame0.png");
+    match recorder::probe::probe(&file.to_string_lossy(), Some(&png)) {
+        Ok(info) => {
+            println!(
+                "probe OK: {}x{}  samples={}  last_ts={}ms  frame0={}",
+                info.width,
+                info.height,
+                info.sample_count,
+                info.last_timestamp_100ns / 10_000,
+                png.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("probe failed: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

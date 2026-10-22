@@ -54,17 +54,7 @@ pub fn grab_item(
 
     let result = (|| {
         let frame = wait_for_frame(&pool, &rx)?;
-        let content = frame.ContentSize().map_err(map_com)?;
-        let surface = frame.Surface().map_err(map_com)?;
-        let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(map_com)?;
-        // SAFETY: the surface's DXGI interface is an ID3D11Texture2D under WGC.
-        let texture: ID3D11Texture2D = unsafe { access.GetInterface() }.map_err(map_com)?;
-        let out = d3d.texture_to_frame(
-            &texture,
-            content.Width as u32,
-            content.Height as u32,
-            Duration::ZERO,
-        )?;
+        let out = frame_to_cpu(d3d, &frame, Duration::ZERO)?;
         let _ = frame.Close();
         Ok(out)
     })();
@@ -75,6 +65,26 @@ pub fn grab_item(
     let _ = pool.Close();
 
     result
+}
+
+/// Copy a WGC frame's GPU surface into a CPU [`Frame`]. Shared by the one-shot grab and the
+/// continuous recording stream.
+pub(crate) fn frame_to_cpu(
+    d3d: &D3dDevice,
+    frame: &Direct3D11CaptureFrame,
+    timestamp: Duration,
+) -> Result<Frame> {
+    let content = frame.ContentSize().map_err(map_com)?;
+    let surface = frame.Surface().map_err(map_com)?;
+    let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(map_com)?;
+    // SAFETY: the surface's DXGI interface is an ID3D11Texture2D under WGC.
+    let texture: ID3D11Texture2D = unsafe { access.GetInterface() }.map_err(map_com)?;
+    d3d.texture_to_frame(
+        &texture,
+        content.Width as u32,
+        content.Height as u32,
+        timestamp,
+    )
 }
 
 fn wait_for_frame(

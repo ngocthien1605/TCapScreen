@@ -6,6 +6,7 @@
 
 pub mod d3d;
 pub mod monitors;
+pub mod stream;
 pub mod wgc;
 pub mod windows_list;
 
