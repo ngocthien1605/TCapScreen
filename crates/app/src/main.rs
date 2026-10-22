@@ -3,8 +3,9 @@
 //! Running with no subcommand starts the tray application. The `dev` subcommand exposes
 //! diagnostic commands that do not start the tray (see [`dev`]).
 
-// NOTE: `#![windows_subsystem = "windows"]` (hide the console) is deliberately deferred to M6
-// so the dev CLI and early manual testing can print to a console. See DECISIONS.md.
+// GUI subsystem (no console window for the tray app). When launched from a terminal we attach
+// to the parent console at startup so the `dev` CLI still prints (see `attach_parent_console`).
+#![windows_subsystem = "windows"]
 
 mod capture_flow;
 mod clipboard;
@@ -18,6 +19,7 @@ mod overlay;
 mod record_flow;
 mod recording;
 mod single_instance;
+mod startup;
 mod tray;
 
 use std::process::ExitCode;
@@ -55,6 +57,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // In the GUI subsystem there's no console; if we were launched from a terminal, attach to it
+    // so the dev CLI (and clap's --help/errors) are visible.
+    attach_parent_console();
+
     // Must happen before any window (incl. the tray's hidden one) so all coordinates are in
     // true physical pixels on mixed-DPI setups.
     capture_core::ensure_process_dpi_aware();
@@ -127,6 +133,11 @@ fn start() -> anyhow::Result<()> {
         );
     }
 
+    // Apply the run-at-startup preference (re-writes the path in case the exe moved).
+    if let Err(e) = startup::apply(settings.run_at_startup) {
+        tracing::warn!("could not apply run-at-startup: {e:#}");
+    }
+
     // Create the dispatch window (owns app state), the tray, and the global hotkeys. Each must
     // stay alive for the whole message loop.
     let dispatch_hwnd = dispatch::create(settings.clone(), output_folder)?;
@@ -137,6 +148,44 @@ fn start() -> anyhow::Result<()> {
     run_message_loop();
     tracing::info!("RustShot tray loop exited");
     Ok(())
+}
+
+/// Attach to the launching terminal's console (if any) and redirect stdout/stderr to it, so a
+/// GUI-subsystem binary still prints when run from a shell. No-op when launched from Explorer.
+fn attach_parent_console() {
+    use windows::core::w;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: console/file handle setup; all failures are tolerated (we simply stay windowless).
+    unsafe {
+        // If stdout is already a valid (inherited) handle — a pipe or redirect from the shell —
+        // leave it alone; overriding it would break piped output.
+        if let Ok(h) = GetStdHandle(STD_OUTPUT_HANDLE) {
+            if !h.is_invalid() {
+                return;
+            }
+        }
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            return; // no parent console (launched from Explorer / as a startup entry)
+        }
+        if let Ok(handle) = CreateFileW(
+            w!("CONOUT$"),
+            FILE_GENERIC_WRITE.0,
+            FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        ) {
+            let _ = SetStdHandle(STD_OUTPUT_HANDLE, handle);
+            let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
+        }
+    }
 }
 
 pub(crate) fn init_com_sta() {

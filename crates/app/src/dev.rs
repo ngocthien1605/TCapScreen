@@ -61,6 +61,11 @@ pub enum DevCmd {
         /// Output .mp4 path.
         out: PathBuf,
     },
+    /// Generate the app `.ico` from the programmatic icon (build-time resource).
+    MakeIcon {
+        /// Output .ico path.
+        out: PathBuf,
+    },
     /// Decode an MP4 back with Media Foundation and report size/sample-count (+ frame-0 PNG).
     ProbeMp4 {
         /// The .mp4 file to probe.
@@ -116,6 +121,7 @@ pub fn run(cmd: DevCmd) -> ExitCode {
             seconds,
             out,
         } => cmd_record_monitor(index, seconds, out),
+        DevCmd::MakeIcon { out } => cmd_make_icon(out),
         DevCmd::ProbeMp4 { file } => cmd_probe_mp4(file),
         DevCmd::RecordGif {
             index,
@@ -286,6 +292,27 @@ fn cmd_probe_mp4(file: PathBuf) -> ExitCode {
         }
         Err(e) => {
             eprintln!("probe failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_make_icon(out: PathBuf) -> ExitCode {
+    let (rgba, w, h) = crate::icon::app_icon_rgba();
+    let Some(img) = imaging::Rgba::from_raw(w, h, rgba) else {
+        eprintln!("icon buffer size mismatch");
+        return ExitCode::FAILURE;
+    };
+    if let Some(parent) = out.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match imaging::save_ico(&img, &out) {
+        Ok(()) => {
+            println!("wrote {}x{} icon to {}", w, h, out.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("icon write failed: {e}");
             ExitCode::FAILURE
         }
     }

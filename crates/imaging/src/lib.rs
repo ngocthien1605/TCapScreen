@@ -18,6 +18,24 @@ pub fn load_rgba(path: &Path) -> Result<RgbaImage, ImagingError> {
     Ok(image::open(path)?.to_rgba8())
 }
 
+/// Encode an RGBA image as a Windows `.ico` (single image; ≤256 px per side).
+pub fn save_ico(img: &RgbaImage, path: &Path) -> Result<(), ImagingError> {
+    use image::codecs::ico::IcoEncoder;
+    use image::ExtendedColorType;
+
+    let file = std::fs::File::create(path).map_err(|source| ImagingError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    IcoEncoder::new(std::io::BufWriter::new(file)).write_image(
+        img.as_raw(),
+        img.width(),
+        img.height(),
+        ExtendedColorType::Rgba8,
+    )?;
+    Ok(())
+}
+
 /// Decode a GIF and report (width, height, frame count) — used to verify GIF output.
 pub fn probe_gif(path: &Path) -> Result<(u32, u32, usize), ImagingError> {
     use image::codecs::gif::GifDecoder;
