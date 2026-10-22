@@ -178,7 +178,7 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 | Release build (`lto=thin`, `strip`, no panic=abort) | ✅ | `cargo build --release` green |
 | Portable zip script | ✅ | `scripts/build-portable.ps1` → `dist/RustShot-<ver>-portable-x64.zip` built & listed |
 | WiX MSI source (`wix/main.wxs`): Program Files install, Start-menu shortcut, ARP entry, major-upgrade | ✅ (authored) | WiX not installed here → building the MSI is a release step (🔬) |
-| `cargo-deny` policy (`deny.toml`): advisories, license allow-list, source/version bans | ✅ (authored) | cargo-deny not installed → `cargo deny check` is a CI/release step (🔬) |
+| `cargo-deny` policy (`deny.toml`): advisories, license allow-list, source/version bans | ✅ | `cargo deny check` → advisories/bans/licenses/sources all **ok** |
 | MIT license + LICENSE file | ✅ | committed |
 | `docs/PACKAGING.md` | ✅ | portable + MSI + cargo-deny instructions |
 
