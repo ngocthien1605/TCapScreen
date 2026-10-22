@@ -805,6 +805,18 @@ fn is_checked(hwnd: HWND, id: i32) -> bool {
     unsafe { IsDlgButtonChecked(hwnd, id) == BST_CHECKED.0 }
 }
 
+/// The value to store for the output-folder field. The dialog displays the *resolved* folder, so
+/// an untouched default must be saved back as empty ("use the default") rather than pinned as an
+/// explicit path.
+fn folder_setting(text: &str, default: Option<PathBuf>) -> PathBuf {
+    let typed = PathBuf::from(text);
+    if text.is_empty() || default.as_ref() == Some(&typed) {
+        PathBuf::new()
+    } else {
+        typed
+    }
+}
+
 /// Read every control into a `Settings`, validating the hotkeys. Returns a user-facing message
 /// (shown in a warning box, dialog left open) if a shortcut is unparseable or two conflict.
 fn try_gather(hwnd: HWND, initial: &Settings) -> Result<Settings, String> {
@@ -833,11 +845,7 @@ fn try_gather(hwnd: HWND, initial: &Settings) -> Result<Settings, String> {
     }
 
     let folder = get_text(hwnd, EDIT_FOLDER);
-    s.output_folder = if folder.trim().is_empty() {
-        PathBuf::new()
-    } else {
-        PathBuf::from(folder.trim())
-    };
+    s.output_folder = folder_setting(folder.trim(), config::paths::default_output_folder().ok());
 
     let hk_strs: [String; 6] = std::array::from_fn(|i| get_text(hwnd, EDIT_HK_BASE + i as i32));
     s.hotkeys = strings_to_map(&hk_strs)?;
@@ -1263,6 +1271,24 @@ mod tests {
         strs[0] = "Ctrl+Shift+R".to_string();
         assert_eq!(strs[4], "Ctrl+Shift+R");
         assert!(strings_to_map(&strs).is_err());
+    }
+
+    #[test]
+    fn untouched_default_folder_is_stored_as_empty() {
+        let default = PathBuf::from(r"C:\Pictures\RustShot");
+        assert_eq!(
+            folder_setting(r"C:\Pictures\RustShot", Some(default.clone())),
+            PathBuf::new()
+        );
+        assert_eq!(folder_setting("", Some(default.clone())), PathBuf::new());
+        assert_eq!(
+            folder_setting(r"D:\Shots", Some(default)),
+            PathBuf::from(r"D:\Shots")
+        );
+        assert_eq!(
+            folder_setting(r"D:\Shots", None),
+            PathBuf::from(r"D:\Shots")
+        );
     }
 
     #[test]

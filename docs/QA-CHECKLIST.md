@@ -50,13 +50,18 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 
 ## M6/M7
 - [ ] Settings UI edits persist and take effect.
-- [ ] Hotkeys section: editing a shortcut field re-registers that hotkey on OK; a blank field
+- [x] Hotkeys section: editing a shortcut field re-registers that hotkey on OK; a blank field
       unbinds it; an invalid entry or a duplicate combination is reported and the dialog stays
-      open; "Restore default hotkeys" resets all six fields.
-- [ ] Hotkeys "Modify" button: capture dialog records the pressed combination (incl.
-      `PrintScreen`), Alt-combos, and Cancel leaves the field unchanged; the overlay never opens
-      while the capture dialog is up. (Quit other screenshot tools first — a global PrintScreen
-      hook in e.g. Screenpresso can swallow the key before RustShot's capture field sees it.)
+      open; "Restore default hotkeys" resets all six fields. *(Driven end-to-end against the
+      release build with UI automation: rebinding Monitor screenshot to Ctrl+Alt+F8 in-session
+      made the new key capture a screenshot and the old key stop; invalid/duplicate entries named
+      the offending row and kept the dialog open; Restore defaults + OK reset the config.)*
+- [x] Hotkeys "Modify" button: capture dialog records the pressed combination (incl.
+      `PrintScreen`), Alt-combos; Esc leaves the field unchanged, Backspace clears it, tapping
+      Alt alone does nothing. *(Verified with real key events, including Shift+PrintScreen with
+      Screenpresso running.)* Hotkeys are suspended while Settings is open and restored after
+      Cancel. Still worth a human check: the Win-key combos, and PrintScreen with Windows'
+      "Use the Print screen key to open screen capture" setting turned on.
 - [x] Settings + capture dialog templates render without error — auto-verified by
       `rustshot dev settings-selftest` (both must report OK, not a `-1` result).
 - [ ] Run-at-startup toggle adds/removes the `Run` key (opt-in).

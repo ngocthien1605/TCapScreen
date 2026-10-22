@@ -5,9 +5,11 @@
 //! registration (which needs a live message loop) is best-effort: a key Windows has already
 //! claimed (e.g. PrintScreen → Snipping Tool) logs a warning instead of failing startup.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::c_void;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::{Mutex, Once};
 
 use config::{Hotkey, HotkeyMap, Modifier};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
@@ -63,6 +65,28 @@ pub fn to_hotkey(hk: &Hotkey) -> Option<HotKey> {
     Some(HotKey::new(Some(mods_to_modifiers(&hk.mods)), code))
 }
 
+/// Hotkey id -> action table consulted by the single global event handler. `global-hotkey` keeps
+/// only the *first* handler ever installed (a `OnceCell`), so re-registering after Settings must
+/// swap this table rather than install a new handler — otherwise rebound keys never fire.
+static ROUTES: Mutex<BTreeMap<u32, Action>> = Mutex::new(BTreeMap::new());
+/// The dispatch window the handler posts to (an `HWND` stored as an integer; it is not `Send`).
+static DISPATCH_HWND: AtomicIsize = AtomicIsize::new(0);
+static INSTALL_HANDLER: Once = Once::new();
+
+/// Replace the active hotkey routes.
+fn set_routes(routes: BTreeMap<u32, Action>) {
+    *ROUTES.lock().unwrap_or_else(|e| e.into_inner()) = routes;
+}
+
+/// The action bound to a registered hotkey id, if any.
+fn route_for(id: u32) -> Option<Action> {
+    ROUTES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .copied()
+}
+
 /// Owns the registered hotkeys. Kept alive for the whole run (dropping it unregisters them).
 pub struct Hotkeys {
     _manager: GlobalHotKeyManager,
@@ -113,7 +137,7 @@ pub fn register(map: &HotkeyMap, dispatch_hwnd: HWND) -> Option<Hotkeys> {
         ("stop_recording", &map.stop_recording, Action::StopRecording),
     ];
 
-    let mut routes = HashMap::new();
+    let mut routes = BTreeMap::new();
     for (name, hk, action) in bindings {
         if conflicting.contains(name) {
             tracing::warn!("hotkey '{name}' ({hk}) skipped: conflicts with another binding");
@@ -139,17 +163,21 @@ pub fn register(map: &HotkeyMap, dispatch_hwnd: HWND) -> Option<Hotkeys> {
         }
     }
 
-    // HWND is not Send; pass it through the handler as an isize and reconstruct on the UI thread
-    // (the handler fires on the thread that created the manager — the UI thread).
-    let hwnd_raw = dispatch_hwnd.0 as isize;
-    GlobalHotKeyEvent::set_event_handler(Some(move |ev: GlobalHotKeyEvent| {
-        if ev.state != HotKeyState::Pressed {
-            return;
-        }
-        if let Some(action) = routes.get(&ev.id).copied() {
-            dispatch::post(HWND(hwnd_raw as *mut c_void), action);
-        }
-    }));
+    // Publish the new routes, then make sure the (one and only) handler is installed. It fires on
+    // the thread that created the manager — the UI thread — and looks routes up at press time.
+    set_routes(routes);
+    DISPATCH_HWND.store(dispatch_hwnd.0 as isize, Ordering::SeqCst);
+    INSTALL_HANDLER.call_once(|| {
+        GlobalHotKeyEvent::set_event_handler(Some(|ev: GlobalHotKeyEvent| {
+            if ev.state != HotKeyState::Pressed {
+                return;
+            }
+            if let Some(action) = route_for(ev.id) {
+                let hwnd = HWND(DISPATCH_HWND.load(Ordering::SeqCst) as *mut c_void);
+                dispatch::post(hwnd, action);
+            }
+        }));
+    });
 
     Some(Hotkeys { _manager: manager })
 }
@@ -196,6 +224,22 @@ mod tests {
         for (name, hk) in HotkeyMap::default().entries() {
             assert!(to_hotkey(hk).is_some(), "{name} ({hk}) did not map");
         }
+    }
+
+    #[test]
+    fn rebinding_replaces_routes_instead_of_keeping_stale_ones() {
+        // Regression: the handler used to capture the *first* routes forever, so a hotkey
+        // rebound from Settings registered with Windows but never triggered an action.
+        set_routes(BTreeMap::from([(900_001, Action::ShotRegion)]));
+        assert_eq!(route_for(900_001), Some(Action::ShotRegion));
+
+        set_routes(BTreeMap::from([(900_002, Action::ShotMonitor)]));
+        assert_eq!(
+            route_for(900_002),
+            Some(Action::ShotMonitor),
+            "new binding must route"
+        );
+        assert_eq!(route_for(900_001), None, "old binding must be gone");
     }
 
     #[test]
