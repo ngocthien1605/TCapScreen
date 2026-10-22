@@ -49,7 +49,9 @@ both in red, chosen from the toolbar:
 
 - **Rectangle** — drag on the image to draw a red rectangle.
 - **Text** — drag to draw a red box, then just type; **Enter** saves the text into the box.
+  **Shift+Enter** or **Alt+Enter** starts a new line instead of saving.
   `Backspace` edits while typing, `Esc` throws the text away, and clicking elsewhere also saves it.
+  The mouse cursor over the image is a red crosshair.
 
 Other controls: **Undo** (`Ctrl+Z`) removes the last annotation (or cancels the one you're drawing);
 **Save** (`Ctrl+S`) writes a copy next to the original as `…_annotated.png` — your original is

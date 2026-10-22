@@ -27,7 +27,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::CheckRadioButton;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_ESCAPE,
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_RETURN,
+    VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
@@ -36,10 +37,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HMENU, IDC_CROSS, IDNO, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL, SM_CXSCREEN, SM_CYSCREEN,
     SW_SHOW, WINDOW_EX_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_ERASEBKGND, WM_KEYDOWN,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT,
-    WM_SIZE, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    WM_SIZE, WM_SYSKEYDOWN, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
-use super::model::{font_px, Editor, EscapeResult, Item, Tool, Typing, View};
+use super::model::{
+    enter_action, font_px, Editor, EnterAction, EscapeResult, Item, Tool, Typing, View,
+};
 
 const CLASS_NAME: PCWSTR = w!("RustShotAnnotate");
 static REGISTER: Once = Once::new();
@@ -177,7 +180,10 @@ fn ensure_class() -> Result<()> {
                 lpfnWndProc: Some(wndproc),
                 hInstance: hinstance.into(),
                 lpszClassName: CLASS_NAME,
-                hCursor: LoadCursorW(None, IDC_CROSS).unwrap_or_default(),
+                // The red crosshair; the system cross if it cannot be built.
+                hCursor: super::cursor::create()
+                    .or_else(|| LoadCursorW(None, IDC_CROSS).ok())
+                    .unwrap_or_default(),
                 ..Default::default()
             };
             if RegisterClassW(&wc) == 0 {
@@ -320,6 +326,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             handle_key(hwnd, ctx, wparam.0 as u16);
             LRESULT(0)
         }
+        // Alt+Enter arrives as a *system* key message (and produces no WM_CHAR).
+        WM_SYSKEYDOWN if wparam.0 as u16 == VK_RETURN.0 => {
+            handle_key(hwnd, ctx, wparam.0 as u16);
+            LRESULT(0)
+        }
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
             match id {
@@ -385,11 +396,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 fn handle_char(hwnd: HWND, ctx: &mut Ctx, unit: u16) {
     match unit {
         0x08 => ctx.editor.on_backspace(),
-        0x0D => {
-            if ctx.editor.on_enter() {
-                ctx.dirty = true;
-            }
-        }
+        // Enter (plain, Shift, Ctrl) is handled in `handle_key`, where Shift/Alt can be told
+        // apart; the character message must not also act on it.
+        0x0D | 0x0A => {}
         u if (0xD800..0xDC00).contains(&u) => {
             ctx.high_surrogate = Some(u);
             return;
@@ -410,9 +419,23 @@ fn handle_char(hwnd: HWND, ctx: &mut Ctx, unit: u16) {
 }
 
 fn handle_key(hwnd: HWND, ctx: &mut Ctx, vk: u16) {
-    // SAFETY: reads the Ctrl key state for the message being processed.
-    let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
-    if vk == VK_ESCAPE.0 {
+    // SAFETY: reads a modifier's state for the message being processed.
+    let down = |k: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY| unsafe {
+        GetKeyState(k.0 as i32) < 0
+    };
+    let ctrl = down(VK_CONTROL);
+    if vk == VK_RETURN.0 {
+        match enter_action(down(VK_SHIFT), down(VK_MENU)) {
+            EnterAction::NewLine => ctx.editor.on_newline(),
+            EnterAction::Commit => {
+                let before = ctx.editor.items().len();
+                ctx.editor.on_enter();
+                if ctx.editor.items().len() != before {
+                    ctx.dirty = true;
+                }
+            }
+        }
+    } else if vk == VK_ESCAPE.0 {
         if ctx.editor.on_escape() == EscapeResult::Nothing {
             // SAFETY: ask ourselves to close (runs the unsaved-changes prompt).
             unsafe {
@@ -842,6 +865,53 @@ mod tests {
             }
         }
         assert!(red > 30, "expected red glyph pixels, found {red}");
+    }
+
+    /// Count text-coloured pixels in the rows `y0..y1` of the box interior.
+    fn red_in_rows(img: &Rgba, y0: u32, y1: u32) -> usize {
+        let mut n = 0;
+        for y in y0..y1 {
+            for x in 12..190 {
+                let p = px(img, x, y);
+                if p[0] > 200 && p[1] < 120 && p[2] < 120 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn a_line_break_puts_the_text_on_a_second_line() {
+        let rect = Rect::new(5, 5, 190, 130); // tall box -> 32 px font, ~43 px per line
+        let one = render(
+            &white(200, 140),
+            &[Item::Text {
+                rect,
+                text: "A".into(),
+            }],
+        )
+        .unwrap();
+        let two = render(
+            &white(200, 140),
+            &[Item::Text {
+                rect,
+                text: "A\nA".into(),
+            }],
+        )
+        .unwrap();
+        // Rows 55..95 are only reached by a second line of text.
+        assert_eq!(
+            red_in_rows(&one, 55, 95),
+            0,
+            "single line stays on the first row"
+        );
+        assert!(
+            red_in_rows(&two, 55, 95) > 30,
+            "second line is drawn lower down"
+        );
+        // The first line is identical in both.
+        assert!(red_in_rows(&two, 10, 50) > 30);
     }
 
     #[test]

@@ -143,6 +143,13 @@ impl Editor {
         }
     }
 
+    /// `Shift+Enter` / `Alt+Enter`: start a new line in the text box being typed (does not save).
+    pub fn on_newline(&mut self) {
+        if let Some(t) = self.typing.as_mut() {
+            t.text.push('\n');
+        }
+    }
+
     /// `Enter`: save the text box. Returns true if there was a text box being typed.
     pub fn on_enter(&mut self) -> bool {
         let was_typing = self.typing.is_some();
@@ -188,6 +195,25 @@ impl Editor {
         let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
         let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
         Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+}
+
+/// What pressing Enter does while typing in a text box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnterAction {
+    /// Save the text into the box.
+    Commit,
+    /// Insert a line break and keep typing.
+    NewLine,
+}
+
+/// Plain `Enter` saves; `Shift+Enter` and `Alt+Enter` insert a new line instead. Pure, so the
+/// rule is unit-tested independently of the keyboard.
+pub fn enter_action(shift: bool, alt: bool) -> EnterAction {
+    if shift || alt {
+        EnterAction::NewLine
+    } else {
+        EnterAction::Commit
     }
 }
 
@@ -327,6 +353,57 @@ mod tests {
         e.on_char('\r');
         e.on_backspace();
         assert_eq!(e.typing().unwrap().text, "ab");
+    }
+
+    #[test]
+    fn only_plain_enter_saves_shift_or_alt_enter_makes_a_new_line() {
+        assert_eq!(enter_action(false, false), EnterAction::Commit);
+        assert_eq!(enter_action(true, false), EnterAction::NewLine);
+        assert_eq!(enter_action(false, true), EnterAction::NewLine);
+        assert_eq!(enter_action(true, true), EnterAction::NewLine);
+    }
+
+    #[test]
+    fn newline_keeps_typing_and_does_not_save() {
+        let mut e = Editor::new(200, 100);
+        e.set_tool(Tool::Text);
+        drag(&mut e, (10, 10), (110, 50));
+        type_str(&mut e, "line1");
+        e.on_newline();
+        type_str(&mut e, "line2");
+        assert!(e.is_typing(), "a new line must not save the text");
+        assert!(e.items().is_empty());
+        assert_eq!(e.typing().unwrap().text, "line1\nline2");
+
+        assert!(
+            e.on_enter(),
+            "plain Enter then saves the whole multi-line text"
+        );
+        assert_eq!(
+            e.items(),
+            &[Item::Text {
+                rect: Rect::new(10, 10, 100, 40),
+                text: "line1\nline2".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn newline_without_a_text_box_is_ignored() {
+        let mut e = Editor::new(200, 100);
+        e.on_newline();
+        assert!(!e.is_typing() && e.items().is_empty());
+    }
+
+    #[test]
+    fn backspace_can_remove_a_newline() {
+        let mut e = Editor::new(200, 100);
+        e.set_tool(Tool::Text);
+        drag(&mut e, (10, 10), (110, 50));
+        type_str(&mut e, "a");
+        e.on_newline();
+        e.on_backspace();
+        assert_eq!(e.typing().unwrap().text, "a");
     }
 
     #[test]
