@@ -1092,9 +1092,12 @@ unsafe extern "system" fn edit_subclass(
         }
         WM_KEYUP | WM_SYSKEYUP => {
             let vk = (wparam.0 & 0xFFFF) as u16;
-            // PrintScreen only reports on key-up.
+            // PrintScreen only reports on key-up. Also swallow modifier key-ups so releasing
+            // Alt alone doesn't fall through to DefWindowProc and open the system menu.
             if vk == VK_SNAPSHOT {
                 set_captured_key(d, "PrintScreen", hwnd);
+                LRESULT(0)
+            } else if is_modifier_vk(vk) {
                 LRESULT(0)
             } else {
                 pass()

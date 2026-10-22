@@ -80,8 +80,8 @@ Either click **Modify** next to a row and press the key combination you want (in
 `PrintScreen` and `Alt`/`Win` combos; Backspace clears it, Enter accepts, Esc cancels), or type
 a shortcut directly as `Modifier+…+Key` (for example `Ctrl+Shift+R`, or just `PrintScreen`);
 leave a field **blank** to turn that hotkey off. Supported modifiers are `Ctrl`, `Alt`, `Shift`, and
-`Win`; keys include letters, digits, `F1`–`F24`, and `PrintScreen`, `Escape`, `Enter`, `Space`,
-`Delete`, `Insert`, `PageUp`, `PageDown`. **Restore default hotkeys** resets all six to the
+`Win`; keys include letters, digits, `F1`–`F24`, and `PrintScreen`, `Space`, `Tab`, `Delete`,
+`Insert`, `Home`, `End`, `PageUp`, `PageDown`. **Restore default hotkeys** resets all six to the
 table above. On **OK**, an invalid shortcut or two actions sharing the same combination are
 reported and the dialog stays open so you can fix them.
 
