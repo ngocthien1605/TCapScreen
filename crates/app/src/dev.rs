@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use capture_core::{CaptureBackend, CaptureTarget, GrabOpts, WindowsBackend};
 use clap::Subcommand;
 use config::Settings;
 
@@ -28,9 +29,107 @@ pub fn run(cmd: DevCmd) -> ExitCode {
     match cmd {
         DevCmd::Config => cmd_config(),
         DevCmd::Paths => cmd_paths(),
-        DevCmd::ListMonitors | DevCmd::GrabMonitor { .. } => {
-            eprintln!("This dev command is implemented in milestone M1 (capture engine).");
-            ExitCode::from(2)
+        DevCmd::ListMonitors => cmd_list_monitors(),
+        DevCmd::GrabMonitor { index, out } => cmd_grab_monitor(index, out),
+    }
+}
+
+fn cmd_list_monitors() -> ExitCode {
+    let backend = match WindowsBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match backend.monitors() {
+        Ok(mons) => {
+            println!("{} monitor(s):", mons.len());
+            for (i, m) in mons.iter().enumerate() {
+                println!(
+                    "  [{i}] {:<14} {}x{} @ ({},{})  scale {:.0}%{}",
+                    m.name,
+                    m.bounds.width,
+                    m.bounds.height,
+                    m.bounds.x,
+                    m.bounds.y,
+                    m.scale_factor * 100.0,
+                    if m.is_primary { "  (primary)" } else { "" }
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error enumerating monitors: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_grab_monitor(index: usize, out: PathBuf) -> ExitCode {
+    let backend = match WindowsBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mons = match backend.monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error enumerating monitors: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(mon) = mons.get(index) else {
+        eprintln!("no monitor at index {index} (found {})", mons.len());
+        return ExitCode::FAILURE;
+    };
+
+    let frame = match backend.grab(
+        &CaptureTarget::Monitor(mon.id),
+        GrabOpts {
+            include_cursor: false,
+        },
+    ) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("capture failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "captured frame: {}x{}  stride={} (width*4={}, padding={})",
+        frame.width,
+        frame.height,
+        frame.stride,
+        frame.width as usize * 4,
+        frame.stride.saturating_sub(frame.width as usize * 4),
+    );
+
+    let img = match imaging::frame_to_rgba(&frame, true) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("conversion failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if imaging::is_near_black(&img, 8, 16) {
+        eprintln!("warning: capture is almost entirely black (protected/DRM content?)");
+    }
+    match imaging::save_image(&img, &out, 90) {
+        Ok(()) => {
+            println!(
+                "saved {}x{} to {}",
+                img.width(),
+                img.height(),
+                out.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("save failed: {e}");
+            ExitCode::FAILURE
         }
     }
 }

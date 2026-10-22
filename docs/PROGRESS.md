@@ -26,10 +26,33 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 - 🔬 Remaining manual QA: visually confirm the tray icon renders and menu items click
   (inherently interactive; see QA-CHECKLIST.md). Capture actions are intentional no-ops (M1/M2).
 
-## M1 — Capture engine (stills)  🟡 in progress
-See PLAN.md. Next: WGC/D3D11 backend, monitor/window enumeration, stride-correct `grab()`.
+## M1 — Capture engine (stills)  ✅ (done & verified; multi-DPI caveat below)
 
-## M2–M7  ⬜ Not started.
+| Item | Status | How verified |
+|---|---|---|
+| WGC/D3D11 device + staging-copy → `Frame` (stride = RowPitch) | ✅ | live capture; stride unit-tested |
+| Monitor enumeration (bounds, DPI scale, primary) | ✅ | `dev list-monitors` live |
+| Window enumeration (filter cloaked/tool/untitled) | ✅ | builds; exercised in M2 window-pick |
+| `grab()` Monitor | ✅ | `dev grab-monitor` → valid PNG (scripted check) |
+| `grab()` Region (crop) / Window / VirtualDesktop (composite) | ✅ (code) | `Frame::crop`/`blit_into` unit-tested; UI exercise in M2 |
+| `imaging::is_near_black` DRM warning | ✅ | unit test |
+| Per-Monitor-V2 DPI awareness at startup | ✅ | code; effect visible in correct bounds |
+
+**Gate (all green):** build ✅ · clippy -D warnings ✅ · fmt ✅ · **53 unit tests pass**.
+
+**Done-when (M1):** a dev command saves a correct full-monitor PNG.
+- ✅ **verified live**: `dev grab-monitor 0 dev-out/m0.png` → 1920×1080 PNG; scripted
+  validation: correct dimensions, luminance stddev 75.6, 255 distinct sampled colours
+  (real content, not black/uniform). BGRA→RGBA channel order unit-tested.
+- 🔬 **multi-monitor + mixed-DPI not hardware-verifiable here**: this dev box has a single
+  1920×1080 display at 100%. The rect/DPI/union/crop/composite math is fully **unit-tested**;
+  the live WGC path is confirmed on the one available display. Running on a mixed-DPI
+  multi-monitor rig remains a manual QA item (QA-CHECKLIST M1).
+
+## M2 — Screenshots complete  ⬜ Next.
+Region overlay, window pick, all-monitors, timer, cursor toggle, clipboard, flyout, hotkeys.
+
+## M3–M7  ⬜ Not started.
 
 ---
 

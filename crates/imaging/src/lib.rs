@@ -146,6 +146,28 @@ pub fn save_image(img: &RgbaImage, path: &Path, jpeg_quality: u8) -> Result<(), 
     })
 }
 
+/// Heuristic: is the image almost entirely black? Protected/DRM windows captured via WGC come
+/// back all-black, so the app can warn rather than silently save a black screenshot. Samples
+/// every `sample_stride`-th pixel; returns true if ≥ 99% of samples have max(R,G,B) ≤ `threshold`.
+pub fn is_near_black(img: &RgbaImage, threshold: u8, sample_stride: u32) -> bool {
+    let stride = sample_stride.max(1);
+    let (mut total, mut dark) = (0u64, 0u64);
+    for (x, y, px) in img.enumerate_pixels() {
+        if x % stride != 0 || y % stride != 0 {
+            continue;
+        }
+        total += 1;
+        let [r, g, b, _] = px.0;
+        if r.max(g).max(b) <= threshold {
+            dark += 1;
+        }
+    }
+    if total == 0 {
+        return false;
+    }
+    dark * 100 >= total * 99
+}
+
 /// A capture timestamp broken into fields (so naming is deterministic and testable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp {
@@ -308,6 +330,22 @@ mod tests {
         // JPEG is lossy; just check we're in the right neighbourhood.
         let p = decoded.get_pixel(8, 8).0;
         assert!((p[0] as i32 - 120).abs() < 20);
+    }
+
+    #[test]
+    fn near_black_detection() {
+        let black = RgbaImage::from_pixel(32, 32, image::Rgba([2, 1, 0, 255]));
+        assert!(is_near_black(&black, 10, 1));
+        let bright = RgbaImage::from_pixel(32, 32, image::Rgba([200, 200, 200, 255]));
+        assert!(!is_near_black(&bright, 10, 1));
+        // Mostly black with a small bright patch is still "near black".
+        let mut mostly = RgbaImage::from_pixel(100, 100, image::Rgba([0, 0, 0, 255]));
+        for y in 0..5 {
+            for x in 0..5 {
+                mostly.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+            }
+        }
+        assert!(is_near_black(&mostly, 10, 1));
     }
 
     #[test]

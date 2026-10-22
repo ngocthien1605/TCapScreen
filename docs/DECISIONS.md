@@ -30,3 +30,32 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   start the tray.
 - **Hotkey model in `config`** as plain data (`mods: Vec<Modifier>`, `key: String`) so parsing
   and conflict detection are pure and unit-testable, independent of `global-hotkey`.
+- **Dev CLI uses a `dev` subcommand** (`rustshot dev grab-monitor 0 out.png`) rather than the
+  prompt's literal `--dev` prefix — clap models nested subcommands cleanly this way. Same intent.
+
+## M1 — Capture engine (stills)
+
+- **Raw WGC via `windows` 0.62 for `grab()`, not `windows-capture`.** We control stride, DPI,
+  threading, and teardown directly; the WinRT projections are stable. The `windows-capture`
+  crate's value is its Media-Foundation `VideoEncoder` (recording), so its evaluation is
+  **deferred to M3** — and gated on whether its encoder accepts externally-supplied frames so
+  `CaptureBackend` stays the seam. The prompt explicitly permits this fallback.
+- **Per-grab D3D device + capture item + frame pool.** Keeps `WindowsBackend` holding no COM
+  state (trivially `Send`); costs tens of ms, inside the 150 ms still budget. Streaming (M3)
+  will keep a device alive instead.
+- **Per-Monitor-V2 DPI awareness set programmatically** at the first line of `main()`
+  (`SetProcessDpiAwarenessContext`), before the tray's hidden window exists. A manifest-based
+  declaration is more robust and is deferred to M6/M7 with the icon resource.
+- **WinRT apartment:** `RoInitialize(RO_INIT_MULTITHREADED)` in `WindowsBackend::new()`;
+  S_FALSE / RPC_E_CHANGED_MODE tolerated. The free-threaded frame pool needs no DispatcherQueue.
+- **Frame delivery:** `CreateFreeThreaded` pool + a `FrameArrived` handler that signals an mpsc
+  channel; the grab waits on the channel with a 2 s hard deadline, then `TryGetNextFrame`. No
+  busy-poll, no hang.
+- **Stride = staging texture `RowPitch`** (may exceed `width*4`); `imaging::frame_to_rgba`
+  honours it. On this dev box 1920×1080 yields `RowPitch == width*4` (no padding), so the
+  padding path is exercised by **unit tests**, not this hardware.
+- **Region/Window/VirtualDesktop** share the same `grab_item` pipeline: Region = grab its
+  monitor + `Rect::to_local`/`clamp_to` + `Frame::crop`; VirtualDesktop = grab each monitor and
+  `Frame::blit_into` a bounding-box buffer. Wired now; exercised from the UI in M2.
+- **Near-black (DRM) detection** is a pure `imaging::is_near_black` heuristic; the app *warns*
+  but still saves — a legitimately black screen is still a valid capture.

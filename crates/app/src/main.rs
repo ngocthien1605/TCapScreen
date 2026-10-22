@@ -42,6 +42,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Must happen before any window (incl. the tray's hidden one) so all coordinates are in
+    // true physical pixels on mixed-DPI setups.
+    capture_core::ensure_process_dpi_aware();
+
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Dev { cmd }) => dev::run(cmd),

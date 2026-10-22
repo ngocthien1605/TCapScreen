@@ -6,10 +6,17 @@
 //! the pure geometry used by both capture and the region overlay.
 
 pub mod geometry;
+pub mod platform;
+
+#[cfg(windows)]
+pub mod win;
+#[cfg(windows)]
+pub use win::WindowsBackend;
 
 pub use geometry::{
     bounding_box, dpi_to_scale, logical_to_physical, physical_to_logical, Point, Rect,
 };
+pub use platform::ensure_process_dpi_aware;
 
 use std::time::Duration;
 
@@ -120,6 +127,59 @@ impl Frame {
     pub fn tight_len(&self) -> usize {
         self.width as usize * self.height as usize * 4
     }
+
+    /// Crop to `rect` (coordinates local to this frame), producing a new tightly-packed frame
+    /// (`stride == width * 4`). `rect` is clamped to the frame bounds; an empty result is
+    /// returned as a 0×0 frame.
+    pub fn crop(&self, rect: Rect) -> Frame {
+        let bounds = Rect::new(0, 0, self.width as i32, self.height as i32);
+        let r = rect.intersect(&bounds).unwrap_or(Rect::new(0, 0, 0, 0));
+        let (cw, ch) = (r.width as usize, r.height as usize);
+        let dst_stride = cw * 4;
+        let mut data = vec![0u8; dst_stride * ch];
+        for row in 0..ch {
+            let sy = r.y as usize + row;
+            let src_off = sy * self.stride + r.x as usize * 4;
+            let src = &self.data[src_off..src_off + dst_stride];
+            let dst = &mut data[row * dst_stride..(row + 1) * dst_stride];
+            dst.copy_from_slice(src);
+        }
+        Frame {
+            data,
+            width: cw as u32,
+            height: ch as u32,
+            stride: dst_stride,
+            format: self.format,
+            timestamp: self.timestamp,
+        }
+    }
+
+    /// Copy this frame's pixels into a tightly-packed destination buffer at `(at_x, at_y)`,
+    /// clipping to the destination bounds. Used to composite monitors into a virtual-desktop
+    /// image. `dest` must be `dest_stride * dest_h` bytes with `dest_stride == dest_w * 4`.
+    pub fn blit_into(&self, dest: &mut [u8], dest_w: u32, dest_h: u32, at_x: i32, at_y: i32) {
+        let dest_stride = dest_w as usize * 4;
+        for sy in 0..self.height as i32 {
+            let dy = at_y + sy;
+            if dy < 0 || dy >= dest_h as i32 {
+                continue;
+            }
+            // Horizontal clip in pixels.
+            let x0 = at_x.max(0);
+            let x1 = (at_x + self.width as i32).min(dest_w as i32);
+            if x1 <= x0 {
+                continue;
+            }
+            let src_x = (x0 - at_x) as usize;
+            let copy_px = (x1 - x0) as usize;
+            let src_off = sy as usize * self.stride + src_x * 4;
+            let Some(src) = self.data.get(src_off..src_off + copy_px * 4) else {
+                continue;
+            };
+            let dst_off = dy as usize * dest_stride + x0 as usize * 4;
+            dest[dst_off..dst_off + copy_px * 4].copy_from_slice(src);
+        }
+    }
 }
 
 /// Errors from capture operations.
@@ -184,5 +244,50 @@ mod tests {
         assert_eq!(f.row(1).unwrap(), &[9, 10, 11, 12, 13, 14, 15, 16]);
         assert!(f.row(2).is_none());
         assert_eq!(f.tight_len(), 16);
+    }
+
+    fn frame_filled(width: u32, height: u32, stride: usize, fill: u8) -> Frame {
+        Frame {
+            data: vec![fill; stride * height as usize],
+            width,
+            height,
+            stride,
+            format: PixelFmt::Bgra8,
+            timestamp: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn crop_produces_tight_subframe() {
+        // 4x4 padded frame; mark pixel (2,1) uniquely.
+        let (w, h, stride) = (4u32, 4u32, 4 * 4 + 8);
+        let mut f = frame_filled(w, h, stride, 0);
+        let off = stride + 2 * 4; // row 1, column 2
+        f.data[off..off + 4].copy_from_slice(&[10, 20, 30, 40]);
+
+        let c = f.crop(Rect::new(2, 1, 2, 2));
+        assert_eq!((c.width, c.height), (2, 2));
+        assert_eq!(c.stride, 8); // tight
+        assert_eq!(&c.data[0..4], &[10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn crop_clamps_to_bounds() {
+        let f = frame_filled(4, 4, 16, 7);
+        let c = f.crop(Rect::new(3, 3, 10, 10)); // overhangs
+        assert_eq!((c.width, c.height), (1, 1));
+    }
+
+    #[test]
+    fn blit_composites_with_clipping() {
+        // Dest 4x2 tight, fill 0. Source 2x2 fill 9 placed at (3,0) so it half-clips at x.
+        let mut dest = vec![0u8; 4 * 4 * 2];
+        let src = frame_filled(2, 2, 8, 9);
+        src.blit_into(&mut dest, 4, 2, 3, 0);
+        // Column 3 (last) of rows 0 and 1 should be 9; column beyond is clipped away.
+        let px = |x: usize, y: usize| dest[y * 16 + x * 4];
+        assert_eq!(px(3, 0), 9);
+        assert_eq!(px(3, 1), 9);
+        assert_eq!(px(0, 0), 0);
     }
 }
