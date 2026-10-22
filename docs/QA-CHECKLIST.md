@@ -17,8 +17,9 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [x] `output_folder = "shots"` (relative) → silently reset to the default and persisted, no
       dialog; `output_folder = 'Z:\nope\shots'` (missing drive) → dialog "not usable", captures
       fall back to `Pictures\RustShot`, config left as typed. *(Verified the same way.)*
-- [ ] Tray tooltip reads "RustShot — N hotkey(s) unavailable" when another app holds some keys
-      (code path exercised; the tooltip text itself was not read back).
+- [ ] Tray tooltip reads "RustShot — N hotkey(s) unavailable" at startup when another app holds
+      some keys (code path exercised; the tooltip text itself was not read back; it is not
+      refreshed after a rebind in Settings).
 - [ ] Settings → OK with a relative folder, or a folder on a missing drive, keeps the dialog
       open with a message; OK with a hotkey another app holds shows a dialog naming it.
 

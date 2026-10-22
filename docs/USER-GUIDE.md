@@ -145,9 +145,9 @@ from a newer build still loads in an older one.
 
 ## Troubleshooting
 
-- **A hotkey does nothing:** another app owns it (see the note above). The tray tooltip says how
-  many hotkeys are unavailable; rebind them in **Settings…** (it tells you if the new key is
-  taken too) or in `config.toml`.
+- **A hotkey does nothing:** another app owns it (see the note above). The tray tooltip set at
+  startup says how many hotkeys were unavailable then; rebind them in **Settings…** (it tells
+  you if the new key is taken too) or in `config.toml`.
 - **"The settings file could not be read" at startup:** `config.toml` was not valid TOML (usually
   a hand-edit typo). RustShot moved it to `config.toml.broken-<number>` next to the original,
   wrote a fresh default file, and started with default settings and hotkeys. Copy what you need

@@ -170,12 +170,17 @@ fn start() -> anyhow::Result<()> {
     dispatch::with_app(|app| app.hotkeys = hotkeys);
 
     // Startup notices go last, once the tray icon is up, so the user can see the app is
-    // running while the (message-pumping) box is open.
-    if let Some(r) = &recovery {
-        notify::notice(&r.message());
-    }
-    if let Some(n) = folder_notice {
-        notify::warn("The configured output folder is not usable.", n);
+    // running while the (message-pumping) box is open. The gate is held meanwhile so a hotkey
+    // pressed at that moment is refused rather than starting a capture nested inside the box.
+    if recovery.is_some() || folder_notice.is_some() {
+        dispatch::with_app(|app| app.busy = true);
+        if let Some(r) = &recovery {
+            notify::notice(&r.message());
+        }
+        if let Some(n) = folder_notice {
+            notify::warn("The configured output folder is not usable.", n);
+        }
+        dispatch::with_app(|app| app.busy = false);
     }
 
     tracing::info!("RustShot is running in the tray");

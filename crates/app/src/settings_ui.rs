@@ -497,9 +497,6 @@ pub fn open() {
         )
     };
 
-    // Release the gate before applying (apply re-enters `with_app` on its own).
-    dispatch::with_app(|a| a.busy = false);
-
     if ret == -1 {
         // SAFETY: immediately reads the thread's last-error after the failed call.
         let err = unsafe { GetLastError() };
@@ -521,6 +518,11 @@ pub fn open() {
         let hk = crate::hotkeys::register(&draft.initial.hotkeys, hwnd);
         dispatch::with_app(|a| a.hotkeys = hk);
     }
+
+    // Release the gate only now: `apply` may show notices (a hotkey Windows refused, a folder
+    // that fell back), and while such a box pumps messages a hotkey press or a second
+    // "Settings…" must still be refused rather than nest inside this call.
+    dispatch::with_app(|a| a.busy = false);
 }
 
 fn apply(new: Settings) {
