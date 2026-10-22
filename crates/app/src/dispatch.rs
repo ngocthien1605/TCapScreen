@@ -119,6 +119,14 @@ pub fn with_app<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
     APP.with(|cell| cell.borrow_mut().as_mut().map(f))
 }
 
+/// Remove and return the app state. Called once after the message loop exits so that
+/// everything it owns (an active recording — which finalizes the file — the flyout, the
+/// hotkeys) is dropped deterministically on the UI thread, whatever posted the `WM_QUIT`.
+/// Left to process exit, the recording's encoder thread could never be joined.
+pub fn take_state() -> Option<AppState> {
+    APP.with(|cell| cell.borrow_mut().take())
+}
+
 /// Create the hidden dispatch window and install `state` (which it takes ownership of). Returns
 /// the window handle used as the action target.
 pub fn create(settings: Settings, output_folder: PathBuf) -> Result<HWND> {
@@ -169,6 +177,16 @@ pub fn create(settings: Settings, output_folder: PathBuf) -> Result<HWND> {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // A panic must not unwind across this FFI boundary (that aborts the process): run the real
+    // handler under the panic guard and fall back to default processing.
+    crate::panic_guard::guard(
+        "dispatch wndproc",
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        || unsafe { wndproc_inner(hwnd, msg, wparam, lparam) },
+    )
+}
+
+unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_RUSTSHOT_ACTION {
         if let Some(action) = Action::from_u32(wparam.0 as u32) {
             handle(action);
@@ -203,6 +221,13 @@ fn handle(action: Action) {
         Settings => crate::settings_ui::open(),
         Quit => {
             tracing::info!("Quit selected");
+            // Finalize an active recording (or cancel a countdown) and drop the flyout *before*
+            // leaving the loop, so the output file is playable and no window outlives the state.
+            crate::record_flow::stop();
+            with_app(|app| {
+                app.flyout = None;
+                app.pending_shot = None;
+            });
             // SAFETY: posts WM_QUIT to this (UI) thread's queue.
             unsafe { PostQuitMessage(0) };
         }
@@ -269,4 +294,44 @@ fn handle(action: Action) {
 /// The current flyout's saved path, copied out under a short borrow (released before use).
 fn flyout_path() -> Option<PathBuf> {
     with_app(|app| app.flyout.as_ref().map(|f| f.path().to_owned())).flatten()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_action_round_trips_through_its_u32() {
+        use Action::*;
+        // Keep in sync with the enum: a variant missing here (or in `from_u32`) would be
+        // silently dropped by the dispatch window at runtime.
+        let all = [
+            ShotRegion,
+            ShotWindow,
+            ShotMonitor,
+            ShotAllMonitors,
+            RecordRegion,
+            StopRecording,
+            ExecuteDelayedShot,
+            OpenFolder,
+            Settings,
+            Quit,
+            FlyoutOpen,
+            FlyoutOpenFolder,
+            FlyoutCopy,
+            FlyoutCopyPath,
+            FlyoutDelete,
+            FlyoutDismiss,
+            ExecuteRecordStart,
+            RecordPauseToggle,
+            RecordGif,
+            FlyoutAnnotate,
+        ];
+        for a in all {
+            assert_eq!(Action::from_u32(a as u32), Some(a), "{a:?}");
+        }
+        assert_eq!(Action::from_u32(0), None);
+        assert_eq!(Action::from_u32(all.len() as u32 + 1), None);
+    }
 }

@@ -17,6 +17,7 @@ mod hotkeys;
 mod icon;
 mod logging;
 mod overlay;
+mod panic_guard;
 mod record_flow;
 mod recording;
 mod settings_ui;
@@ -76,9 +77,10 @@ fn main() -> ExitCode {
 
 /// Start the tray application.
 fn run_app() -> ExitCode {
-    // Logging first so everything after is captured.
+    // Logging first so everything after is captured; then the panic hook, which relies on it.
     let logs_dir = config::paths::logs_dir().ok();
     let _log_guard = logs_dir.as_deref().and_then(logging::init);
+    panic_guard::install_hook();
 
     // Enforce a single instance.
     match SingleInstance::acquire(SINGLE_INSTANCE_NAME) {
@@ -149,6 +151,9 @@ fn start() -> anyhow::Result<()> {
 
     tracing::info!("RustShot is running in the tray");
     run_message_loop();
+    // Tear the state down here, on the UI thread, whatever posted the WM_QUIT: this finalizes
+    // any recording still running and destroys the remaining windows.
+    drop(dispatch::take_state());
     tracing::info!("RustShot tray loop exited");
     Ok(())
 }

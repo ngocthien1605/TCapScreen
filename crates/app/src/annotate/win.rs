@@ -261,6 +261,16 @@ fn ctx_of<'a>(hwnd: HWND) -> Option<&'a mut Ctx> {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // A panic must not unwind across this FFI boundary (that aborts the process): run the real
+    // handler under the panic guard and fall back to default processing.
+    crate::panic_guard::guard(
+        "annotate editor wndproc",
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        || unsafe { wndproc_inner(hwnd, msg, wparam, lparam) },
+    )
+}
+
+unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         // SAFETY: stash the ctx pointer from CREATESTRUCT.
         unsafe {

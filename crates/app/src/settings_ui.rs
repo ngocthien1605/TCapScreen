@@ -610,6 +610,19 @@ pub fn capture_selftest() -> isize {
 unsafe extern "system" fn capture_selftest_dlgproc(
     hwnd: HWND,
     msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    crate::panic_guard::guard(
+        "capture selftest dlgproc",
+        || 0,
+        || unsafe { capture_selftest_dlgproc_inner(hwnd, msg, wparam, lparam) },
+    )
+}
+
+unsafe fn capture_selftest_dlgproc_inner(
+    hwnd: HWND,
+    msg: u32,
     _wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
@@ -642,9 +655,17 @@ unsafe extern "system" fn capture_selftest_dlgproc(
 unsafe extern "system" fn selftest_dlgproc(
     hwnd: HWND,
     msg: u32,
-    _wparam: WPARAM,
+    wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    crate::panic_guard::guard(
+        "settings selftest dlgproc",
+        || 0,
+        || unsafe { selftest_dlgproc_inner(hwnd, msg, wparam, lparam) },
+    )
+}
+
+unsafe fn selftest_dlgproc_inner(hwnd: HWND, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> isize {
     match msg {
         WM_INITDIALOG => {
             // SAFETY: populate controls, then arm a one-shot timer to auto-cancel.
@@ -674,6 +695,15 @@ unsafe extern "system" fn selftest_dlgproc(
 }
 
 unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
+    // A panic must not unwind across this FFI boundary (that aborts the process).
+    crate::panic_guard::guard(
+        "settings dlgproc",
+        || 0,
+        || unsafe { dlgproc_inner(hwnd, msg, wparam, lparam) },
+    )
+}
+
+unsafe fn dlgproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
     match msg {
         WM_INITDIALOG => {
             // SAFETY: stash the Draft pointer for later messages, then populate controls.
@@ -1020,6 +1050,14 @@ unsafe extern "system" fn capture_dlgproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    crate::panic_guard::guard(
+        "hotkey capture dlgproc",
+        || 0,
+        || unsafe { capture_dlgproc_inner(hwnd, msg, wparam, lparam) },
+    )
+}
+
+unsafe fn capture_dlgproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
     match msg {
         WM_INITDIALOG => {
             // SAFETY: stash the draft pointer, prefill the field, and subclass the edit so it
@@ -1076,6 +1114,14 @@ unsafe extern "system" fn edit_subclass(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    crate::panic_guard::guard(
+        "hotkey capture edit subclass",
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        || unsafe { edit_subclass_inner(hwnd, msg, wparam, lparam) },
+    )
+}
+
+unsafe fn edit_subclass_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // SAFETY: userdata holds the CaptureDraft pointer set in WM_INITDIALOG.
     let dptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut CaptureDraft;
     if dptr.is_null() {

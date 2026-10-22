@@ -12,6 +12,7 @@ description = "Platform-agnostic capture traits, geometry, and the Windows (WGC)
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies.windows]

@@ -1,9 +1,43 @@
 //! Structured logging to both stderr and a rolling file under `%APPDATA%\RustShot\logs`.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+/// Where the log files live, once [`init`] has run (used by the panic hook).
+static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// The log directory as text for user-facing messages ("(not available)" before `init`).
+pub fn logs_dir_display() -> String {
+    LOGS_DIR
+        .get()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(log directory not available)".into())
+}
+
+/// Append one line to `panic.log` synchronously. Used by the panic hook: the normal file writer
+/// is a background thread that may never get to flush if the process aborts.
+pub fn write_panic_line(line: &str) {
+    let Some(dir) = LOGS_DIR.get() else {
+        return;
+    };
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("panic.log"))
+    {
+        let _ = writeln!(f, "[unix {secs}] {line}");
+        let _ = f.flush();
+    }
+}
 
 /// Initialise logging. Returns a guard that must be kept alive for the lifetime of the
 /// process (dropping it flushes and stops the background file writer).
@@ -17,6 +51,7 @@ pub fn init(logs_dir: &Path) -> Option<WorkerGuard> {
 
     match std::fs::create_dir_all(logs_dir) {
         Ok(()) => {
+            let _ = LOGS_DIR.set(logs_dir.to_path_buf());
             let file_appender = tracing_appender::rolling::daily(logs_dir, "rustshot.log");
             let (nb, guard) = tracing_appender::non_blocking(file_appender);
             let file_layer = fmt::layer()

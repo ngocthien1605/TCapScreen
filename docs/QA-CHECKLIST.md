@@ -40,6 +40,15 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] Pause/resume produces correct timing (no frozen/!sped-up segments).
 - [ ] Dropped-frame count logged; memory stays bounded (ring buffer) under load.
 - [ ] Target window closes mid-record → recording stops and finalises a playable file.
+- [x] Concurrency gate: while the record overlay or countdown is up, a screenshot hotkey and
+      Settings are refused (`capture already in progress` / `busy; settings dialog not opened`);
+      Stop during the countdown cancels it (`recording countdown cancelled`), nothing starts,
+      and the gate is released. *(Driven on the release build via the dispatch window; log and
+      output folder checked.)*
+- [x] Quit mid-recording finalises the file: `recording saved to …`, loop exits cleanly, and
+      `dev probe-mp4` decodes the result (125 samples, 624×500). *(Verified the same way.)*
+- [ ] Panic containment: unit-tested (`panic_guard`); a real callback panic surfacing as the
+      one-time dialog + `logs\panic.log` has not been provoked live.
 
 ## M4 — Audio
 - [ ] Mic-only, system-only, and mic+system each mux correctly.

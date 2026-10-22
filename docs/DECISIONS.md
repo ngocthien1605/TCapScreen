@@ -12,8 +12,14 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   `Cargo.toml`. Notables vs the prompt's indicative versions: `windows` 0.62.2 (not 0.58),
   `windows-capture` 2.0.1 (not ~1.5), `tray-icon` 0.26, `global-hotkey` 0.9, `eframe` 0.37.
   Exacts captured in `Cargo.lock`.
-- **No `panic = "abort"`** in release: we keep unwinding so panics on worker threads can be
-  caught and surfaced as a friendly dialog (§8 "no panic reaches the user").
+- **No `panic = "abort"`** in release, and panics are actively contained (`app/src/panic_guard.rs`):
+  every Win32 callback body (window/dialog procedures, the hotkey handler, the WGC frame
+  callback) runs under `catch_unwind`, because a panic unwinding across an `extern "system"`
+  boundary aborts the process — for a tray app that means the icon just vanishes. A caught panic
+  is logged, shown once in a dialog, and the callback returns a neutral value. A process-wide
+  hook also writes every panic synchronously to `logs/panic.log`, since the normal file logger
+  is asynchronous and may never flush before an abort. Release keeps line tables in the `.pdb`
+  (`debug = "line-tables-only"`) so those locations are symbolizable.
 - **Edition 2021** (not 2024): the prompt allows either; 2021 is the broadly-stable choice and
   nothing here needs 2024-only features. Revisit if a dependency requires 2024.
 

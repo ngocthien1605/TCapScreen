@@ -169,13 +169,20 @@ pub fn register(map: &HotkeyMap, dispatch_hwnd: HWND) -> Option<Hotkeys> {
     DISPATCH_HWND.store(dispatch_hwnd.0 as isize, Ordering::SeqCst);
     INSTALL_HANDLER.call_once(|| {
         GlobalHotKeyEvent::set_event_handler(Some(|ev: GlobalHotKeyEvent| {
-            if ev.state != HotKeyState::Pressed {
-                return;
-            }
-            if let Some(action) = route_for(ev.id) {
-                let hwnd = HWND(DISPATCH_HWND.load(Ordering::SeqCst) as *mut c_void);
-                dispatch::post(hwnd, action);
-            }
+            // Called from the hotkey crate's own window procedure: contain panics.
+            crate::panic_guard::guard(
+                "hotkey handler",
+                || (),
+                || {
+                    if ev.state != HotKeyState::Pressed {
+                        return;
+                    }
+                    if let Some(action) = route_for(ev.id) {
+                        let hwnd = HWND(DISPATCH_HWND.load(Ordering::SeqCst) as *mut c_void);
+                        dispatch::post(hwnd, action);
+                    }
+                },
+            );
         }));
     });
 

@@ -19,8 +19,20 @@ use crate::recording::{Recording, Toolbar};
 /// Begin a recording: pick a target, queue it behind the countdown, then start. `gif` selects
 /// animated-GIF output instead of MP4.
 pub fn begin(gif: bool) {
-    let already = dispatch::with_app(|a| a.recording.is_some() || a.busy).unwrap_or(true);
-    if already {
+    // Reserve the `busy` gate in one check-and-set, so nothing else (a screenshot hotkey, a
+    // second Record, Settings) can open an overlay nested inside ours or capture the dimmed
+    // overlay itself. It stays reserved through target selection *and* the countdown, and is
+    // released on every exit path below or by `execute_start`.
+    let reserved = dispatch::with_app(|a| {
+        if a.recording.is_some() || a.busy {
+            false
+        } else {
+            a.busy = true;
+            true
+        }
+    })
+    .unwrap_or(false);
+    if !reserved {
         tracing::info!("a capture or recording is already in progress; ignoring");
         return;
     }
@@ -29,10 +41,12 @@ pub fn begin(gif: bool) {
         Ok(Some(t)) => t,
         Ok(None) => {
             tracing::info!("recording cancelled");
+            clear_busy();
             return;
         }
         Err(e) => {
             tracing::error!("could not select a recording target: {e:#}");
+            clear_busy();
             return;
         }
     };
@@ -44,6 +58,7 @@ pub fn begin(gif: bool) {
             a.dispatch_hwnd.0 as isize,
         )
     }) else {
+        clear_busy();
         return;
     };
 
@@ -90,9 +105,13 @@ pub fn begin(gif: bool) {
     }
 }
 
-/// Start the queued recording (immediately, or when the countdown timer fires).
+/// Start the queued recording (immediately, or when the countdown timer fires). Whatever
+/// happens, the `busy` gate reserved by [`begin`] is released: from here on an in-progress
+/// recording is tracked by `AppState::recording`, not by `busy`.
 pub fn execute_start() {
     let Some(cfg) = dispatch::with_app(|a| a.pending_record.take()).flatten() else {
+        // The countdown was cancelled (or there never was a request).
+        clear_busy();
         return;
     };
     let hwnd_raw = dispatch::with_app(|a| a.dispatch_hwnd.0 as isize).unwrap_or(0);
@@ -112,6 +131,11 @@ pub fn execute_start() {
         },
         Err(e) => tracing::error!("could not start recording: {e:#}"),
     }
+    clear_busy();
+}
+
+fn clear_busy() {
+    dispatch::with_app(|a| a.busy = false);
 }
 
 /// Toggle pause/resume on the active recording.
@@ -130,10 +154,18 @@ pub fn toggle_pause() {
     });
 }
 
-/// Stop and finalize the active recording.
+/// Stop and finalize the active recording. A recording still in its countdown is cancelled
+/// instead (the countdown timer then finds nothing queued and releases the gate).
 pub fn stop() {
+    let cancelled = dispatch::with_app(|a| a.pending_record.take().is_some()).unwrap_or(false);
+    if cancelled {
+        tracing::info!("recording countdown cancelled");
+        clear_busy();
+    }
     let Some(rec) = dispatch::with_app(|a| a.recording.take()).flatten() else {
-        tracing::info!("no active recording to stop");
+        if !cancelled {
+            tracing::debug!("no active recording to stop");
+        }
         return;
     };
     // Destroy the toolbar first (drops its window), then finalize the file.

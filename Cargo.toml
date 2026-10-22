@@ -76,3 +76,6 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+# Line tables go to the separate .pdb (not the stripped exe) so a panic location or a crash
+# dump from a user is still symbolizable. The portable zip ships the exe only.
+debug = "line-tables-only"

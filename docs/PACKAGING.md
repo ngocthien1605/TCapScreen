@@ -44,5 +44,7 @@ allow-list, and warns on duplicate crate versions.
 ## Release profile
 
 `[profile.release]` in the workspace `Cargo.toml` enables `lto = "thin"` and `strip = true` for a
-small, fast binary. Panics still unwind (no `panic = "abort"`) so a worker-thread panic can be
-surfaced rather than aborting the process.
+small, fast binary; `debug = "line-tables-only"` keeps a `.pdb` next to the exe in
+`target/release` (not shipped in the zip) so panic locations are symbolizable. Panics still
+unwind (no `panic = "abort"`) and are contained at every Win32 callback boundary — see
+DECISIONS.md — and recorded synchronously in `%APPDATA%\RustShot\logs\panic.log`.

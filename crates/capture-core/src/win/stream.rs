@@ -117,18 +117,25 @@ impl CaptureStream {
         let pool_cb = pool.clone();
         let handler =
             TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |_, _| {
-                if let Ok(frame) = pool_cb.TryGetNextFrame() {
-                    if let Ok(guard) = d3d_cb.lock() {
-                        let ts = start.elapsed();
-                        if let Ok(cpu) = crate::win::wgc::frame_to_cpu(&guard, &frame, ts) {
-                            let out = match crop {
-                                Some(r) => cpu.crop(r),
-                                None => cpu,
-                            };
-                            let _ = tx_cb.send(StreamEvent::Frame(out));
+                // This runs on a WGC pool thread inside a COM callback: a panic here would
+                // unwind across the FFI boundary and abort the whole process, so contain it.
+                let body = || {
+                    if let Ok(frame) = pool_cb.TryGetNextFrame() {
+                        if let Ok(guard) = d3d_cb.lock() {
+                            let ts = start.elapsed();
+                            if let Ok(cpu) = crate::win::wgc::frame_to_cpu(&guard, &frame, ts) {
+                                let out = match crop {
+                                    Some(r) => cpu.crop(r),
+                                    None => cpu,
+                                };
+                                let _ = tx_cb.send(StreamEvent::Frame(out));
+                            }
                         }
+                        let _ = frame.Close();
                     }
-                    let _ = frame.Close();
+                };
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).is_err() {
+                    tracing::error!("panic in the capture frame callback; frame dropped");
                 }
                 Ok(())
             });
