@@ -68,6 +68,11 @@ pub enum RecorderError {
     Capture(String),
     #[error("platform error: {0}")]
     Platform(String),
+    /// The recording stopped before the user asked it to — the source window was closed, the
+    /// graphics device was lost, or a write failed — but everything captured up to that point
+    /// was finalized into a playable file at `path`.
+    #[error("the recording ended early ({reason}); what was captured is saved at {}", path.display())]
+    EndedEarly { path: PathBuf, reason: String },
 }
 
 /// Result alias for recorder operations.
@@ -98,6 +103,12 @@ impl Backend {
         match self {
             Backend::Video(s) => s.is_paused(),
             Backend::Gif(s) => s.is_paused(),
+        }
+    }
+    fn is_finished(&self) -> bool {
+        match self {
+            Backend::Video(s) => s.is_finished(),
+            Backend::Gif(s) => s.is_finished(),
         }
     }
     fn stop(self) -> Result<PathBuf> {
@@ -144,6 +155,17 @@ impl RecorderHandle {
             return s.is_paused();
         }
         false
+    }
+
+    /// True once the recording has ended on its own (source closed, device lost, write
+    /// failure, or the GIF length cap). The owner should then call [`stop`](Self::stop) to
+    /// collect the result — typically [`RecorderError::EndedEarly`] — and tear down its UI.
+    pub fn is_finished(&self) -> bool {
+        #[cfg(windows)]
+        if let Some(s) = &self.inner {
+            return s.is_finished();
+        }
+        true
     }
 
     /// Stop and finalize; returns the written file's path.
@@ -208,6 +230,17 @@ mod tests {
         assert_eq!(even_dims(1920, 1080), (1920, 1080));
         assert_eq!(even_dims(1235, 629), (1234, 628));
         assert_eq!(even_dims(1, 1), (0, 0));
+    }
+
+    #[test]
+    fn ended_early_names_the_file_and_reason() {
+        let e = RecorderError::EndedEarly {
+            path: PathBuf::from(r"C:\x\clip.mp4"),
+            reason: "the captured window was closed".into(),
+        };
+        let s = e.to_string();
+        assert!(s.contains(r"C:\x\clip.mp4"), "{s}");
+        assert!(s.contains("window was closed"), "{s}");
     }
 
     #[test]

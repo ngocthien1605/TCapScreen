@@ -197,6 +197,12 @@ pub enum CaptureError {
     CaptureUnavailable,
     #[error("the captured surface was protected/DRM-black")]
     ProtectedContent,
+    /// The window (or display) being captured no longer exists.
+    #[error("the captured window was closed")]
+    SourceClosed,
+    /// The graphics device behind a capture stream was removed or reset; it never recovers.
+    #[error("the graphics device was lost ({0})")]
+    DeviceLost(String),
     #[error("platform error: {0}")]
     Platform(String),
 }

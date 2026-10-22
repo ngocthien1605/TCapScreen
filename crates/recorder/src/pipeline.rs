@@ -46,6 +46,11 @@ impl Session {
         self.paused.load(Ordering::SeqCst)
     }
 
+    /// True once the encoder thread has exited on its own.
+    pub fn is_finished(&self) -> bool {
+        self.thread.as_ref().is_none_or(|t| t.is_finished())
+    }
+
     pub fn stop(mut self) -> Result<std::path::PathBuf> {
         self.stopping.store(true, Ordering::SeqCst);
         match self.thread.take() {
@@ -128,7 +133,9 @@ fn encode_loop(
     let mut idx: i64 = 0;
     let captured = AtomicU64::new(1);
     let mut emitted: u64 = 0;
-    let mut closed = false;
+    // Why the loop ended before `stopping` was set, if it did.
+    let mut ended_early: Option<String> = None;
+    let mut last_health_check = Instant::now();
     // Audio uses a sample-count clock (can't drift against the video index clock).
     let mut audio_frames: i64 = 0;
 
@@ -148,8 +155,18 @@ fn encode_loop(
     }
 
     let result = (|| -> Result<()> {
-        while !stopping.load(Ordering::SeqCst) && !closed {
+        while !stopping.load(Ordering::SeqCst) && ended_early.is_none() {
             let now = Instant::now();
+
+            // A removed/reset graphics device may simply stop delivering frames, and WGC sends
+            // nothing on an idle desktop anyway, so poll the device rather than a frame clock.
+            if now.saturating_duration_since(last_health_check) >= HEALTH_CHECK_EVERY {
+                last_health_check = now;
+                if let Err(e) = stream.check_health() {
+                    ended_early = Some(e.to_string());
+                    break;
+                }
+            }
             let is_paused = paused.load(Ordering::SeqCst);
             // Accumulate whole pause spans at their edges so `active` time is exact.
             if is_paused && !was_paused {
@@ -169,15 +186,22 @@ fn encode_loop(
                         captured.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(StreamEvent::Closed) => {
-                        closed = true;
+                        ended_early = Some(SOURCE_CLOSED.into());
+                        break;
+                    }
+                    Ok(StreamEvent::Error(e)) => {
+                        ended_early = Some(e.to_string());
                         break;
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        closed = true;
+                        ended_early = Some("the capture stream went away".into());
                         break;
                     }
                 }
+            }
+            if ended_early.is_some() {
+                break;
             }
 
             if !is_paused {
@@ -224,15 +248,32 @@ fn encode_loop(
     tracing::info!(
         "recording finished: {emitted} frames emitted, {cap} captured (~{dropped} coalesced), \
          {w}x{h} @ {fps}fps, audio {audio_secs:.1}s{}",
-        if closed { " (source closed)" } else { "" }
+        match &ended_early {
+            Some(r) => format!(" (ended early: {r})"),
+            None => String::new(),
+        }
     );
 
-    // Always finalize so the file is playable, even if a write errored mid-stream.
+    // Always finalize so the file is playable, even if a write errored mid-stream; then report
+    // an early end *with the path*, so the caller can tell the user where the partial file is.
     let finalize = sink.finalize();
-    result?;
+    if let Err(e) = result {
+        ended_early.get_or_insert_with(|| format!("write failed: {e}"));
+    }
     finalize?;
-    Ok(cfg.out_path)
+    match ended_early {
+        Some(reason) => Err(RecorderError::EndedEarly {
+            path: cfg.out_path,
+            reason,
+        }),
+        None => Ok(cfg.out_path),
+    }
 }
+
+/// How often the encoder loop polls the capture device's health.
+const HEALTH_CHECK_EVERY: Duration = Duration::from_secs(1);
+/// Reason text for a source that disappeared mid-recording.
+pub(crate) const SOURCE_CLOSED: &str = "the captured window or display was closed";
 
 /// Block up to 3s for the first frame; map a close/timeout to an error.
 fn wait_first(rx: &mpsc::Receiver<StreamEvent>) -> Result<Frame> {
@@ -241,6 +282,7 @@ fn wait_first(rx: &mpsc::Receiver<StreamEvent>) -> Result<Frame> {
         Ok(StreamEvent::Closed) => Err(RecorderError::Capture(
             "capture item closed before any frame".into(),
         )),
+        Ok(StreamEvent::Error(e)) => Err(RecorderError::Capture(e.to_string())),
         Err(_) => Err(RecorderError::Capture(
             "no frame arrived within 3s of starting capture".into(),
         )),

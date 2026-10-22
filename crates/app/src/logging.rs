@@ -39,6 +39,16 @@ pub fn write_panic_line(line: &str) {
     }
 }
 
+/// Stderr-only logging for the `dev` commands, so pipeline diagnostics (frame-pool recreates,
+/// early ends) are visible in the terminal. Level comes from `RUSTSHOT_LOG` (default `info`).
+pub fn init_stderr() {
+    let filter = EnvFilter::try_from_env("RUSTSHOT_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_writer(std::io::stderr).with_target(false))
+        .try_init();
+}
+
 /// Initialise logging. Returns a guard that must be kept alive for the lifetime of the
 /// process (dropping it flushes and stops the background file writer).
 ///

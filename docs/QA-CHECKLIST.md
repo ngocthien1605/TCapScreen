@@ -51,7 +51,18 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] 60 s 1080p30 monitor recording plays correctly in VLC and Windows Media Player.
 - [ ] Pause/resume produces correct timing (no frozen/!sped-up segments).
 - [ ] Dropped-frame count logged; memory stays bounded (ring buffer) under load.
-- [ ] Target window closes mid-record → recording stops and finalises a playable file.
+- [x] Target window closes mid-record → recording stops and finalises a playable file. *(Verified
+      on the release build: `dev record-window` on a test console window killed at 5 s returned
+      "ENDED EARLY … the captured window was closed" within 250 ms and `probe-mp4` decoded 121
+      samples / 4.0 s; in the tray app, a window picked in the overlay and then killed made the
+      toolbar disappear within 0.7 s with no Stop press, a "recording ended early" notice naming
+      the saved file, and a playable 3 s MP4.)*
+- [x] Source window resized mid-record → log shows `frame pool recreated at WxH` for each size
+      change; the file keeps its initial dimensions and probes OK. *(Verified with
+      `dev record-window` while shrinking then growing the window.)*
+- [ ] GPU device removed/reset mid-record → recording ends early with "the graphics device was
+      lost" and a playable file. *(Not provokable here; the device poll and the callback's
+      failure counter are unit-tested only.)*
 - [x] Concurrency gate: while the record overlay or countdown is up, a screenshot hotkey and
       Settings are refused (`capture already in progress` / `busy; settings dialog not opened`);
       Stop during the countdown cancels it (`recording countdown cancelled`), nothing starts,

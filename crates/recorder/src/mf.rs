@@ -236,7 +236,9 @@ impl VideoSink {
     }
 
     /// Write one frame at `time_100ns`. The frame is copied (BGRA, tightly packed) into an MF
-    /// buffer, cropping/zero-filling to the sink's dimensions.
+    /// buffer, cropped to the sink's dimensions; a smaller frame (the source window shrank
+    /// mid-recording) is padded with black. The sink's size is fixed at creation, so a source
+    /// that grew is cropped to the original size rather than restarting the encoder.
     pub fn write_frame(&self, frame: &Frame, time_100ns: i64) -> Result<(), RecorderError> {
         let w = self.width as usize;
         let h = self.height as usize;
@@ -250,16 +252,15 @@ impl VideoSink {
             buffer
                 .Lock(&mut ptr, Some(&mut max_len), None)
                 .map_err(mf)?;
-            if !ptr.is_null() {
-                let copy_w = (frame.width as usize).min(w) * 4;
-                let rows = (frame.height as usize).min(h);
-                for y in 0..rows {
-                    let src_off = y * frame.stride;
-                    if let Some(src) = frame.data.get(src_off..src_off + copy_w) {
-                        std::ptr::copy_nonoverlapping(src.as_ptr(), ptr.add(y * w * 4), copy_w);
-                    }
-                }
+            if ptr.is_null() || max_len < size {
+                let _ = buffer.Unlock();
+                return Err(RecorderError::Platform(format!(
+                    "MF buffer too small: {max_len} < {size}"
+                )));
             }
+            // SAFETY: the buffer is locked and at least `size` bytes long.
+            let dst = std::slice::from_raw_parts_mut(ptr, size as usize);
+            pack_bgra(dst, self.width, self.height, frame);
             buffer.Unlock().map_err(mf)?;
             buffer.SetCurrentLength(size).map_err(mf)?;
 
@@ -278,5 +279,94 @@ impl VideoSink {
     pub fn finalize(self) -> Result<(), RecorderError> {
         // SAFETY: finalizes and flushes the sink.
         unsafe { self.writer.Finalize() }.map_err(mf)
+    }
+}
+
+/// Copy `frame` into `dst`, a tightly packed `dst_w`×`dst_h` BGRA buffer. Rows are copied up
+/// to the smaller of the two widths; anything the frame does not cover (a smaller frame, a
+/// short row in a truncated buffer) is zeroed. `MFCreateMemoryBuffer` memory is uninitialized,
+/// so without this a shrunken source would leave garbage in the margins.
+pub(crate) fn pack_bgra(dst: &mut [u8], dst_w: u32, dst_h: u32, frame: &Frame) {
+    let (w, h) = (dst_w as usize, dst_h as usize);
+    let dst_stride = w * 4;
+    debug_assert!(dst.len() >= dst_stride * h);
+    let copy_w = (frame.width as usize).min(w) * 4;
+    let rows = (frame.height as usize).min(h);
+    if frame.width as usize != w || frame.height as usize != h {
+        dst.fill(0);
+    }
+    for y in 0..rows {
+        let src_off = y * frame.stride;
+        let dst_off = y * dst_stride;
+        let Some(src) = frame.data.get(src_off..src_off + copy_w) else {
+            // Short source buffer: blank this row rather than reading past the end.
+            if let Some(d) = dst.get_mut(dst_off..dst_off + dst_stride) {
+                d.fill(0);
+            }
+            continue;
+        };
+        if let Some(d) = dst.get_mut(dst_off..dst_off + copy_w) {
+            d.copy_from_slice(src);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use capture_core::PixelFmt;
+    use std::time::Duration;
+
+    fn frame(w: u32, h: u32, stride: usize, fill: u8) -> Frame {
+        let mut data = vec![0xEEu8; stride * h as usize]; // padding bytes are junk on purpose
+        for y in 0..h as usize {
+            for x in 0..w as usize * 4 {
+                data[y * stride + x] = fill;
+            }
+        }
+        Frame {
+            data,
+            width: w,
+            height: h,
+            stride,
+            format: PixelFmt::Bgra8,
+            timestamp: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn smaller_frame_is_padded_with_black_not_garbage() {
+        let mut dst = vec![0xAAu8; 4 * 4 * 4]; // 4x4 sink, pre-filled with "uninitialized" junk
+        pack_bgra(&mut dst, 4, 4, &frame(2, 2, 2 * 4 + 8, 7));
+        for y in 0..4 {
+            for x in 0..4 {
+                let px = &dst[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+                let want = if x < 2 && y < 2 { 7 } else { 0 };
+                assert!(px.iter().all(|&b| b == want), "pixel ({x},{y}) = {px:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn larger_frame_is_cropped_and_stride_is_honoured() {
+        let mut dst = vec![0u8; 2 * 2 * 4];
+        let mut f = frame(4, 4, 4 * 4 + 12, 1);
+        // Mark pixel (1,1) of the source distinctly; it must land at (1,1) of the 2x2 crop.
+        let off = f.stride + 4;
+        f.data[off..off + 4].copy_from_slice(&[9, 8, 7, 6]);
+        pack_bgra(&mut dst, 2, 2, &f);
+        assert_eq!(&dst[0..4], &[1, 1, 1, 1]);
+        assert_eq!(&dst[12..16], &[9, 8, 7, 6]);
+    }
+
+    #[test]
+    fn truncated_source_buffer_leaves_rows_black() {
+        let mut dst = vec![0xAAu8; 2 * 2 * 4];
+        let mut f = frame(2, 2, 8, 5);
+        f.data.truncate(8); // only one row is actually present
+        pack_bgra(&mut dst, 2, 2, &f);
+        assert!(dst[..8].iter().all(|&b| b == 5));
+        // Same-size frame but the missing row must still be zeroed, not left as junk.
+        assert!(dst[8..].iter().all(|&b| b == 0), "{:?}", &dst[8..]);
     }
 }

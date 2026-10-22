@@ -193,6 +193,16 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Review item (3) — capture-stream failure handling. `StreamEvent::Error` +
+  bounded failure counter in the WGC callback, `check_health` poll (device removed-reason +
+  `IsWindow`; WGC's `Closed` event did not fire for a killed window), frame pool `Recreate` on
+  source resize, `pack_bgra` zero-fill (MF buffers are uninitialized), `RecorderError::EndedEarly
+  { path, reason }`, `RecorderHandle::is_finished` + `Action::RecordPoll` from the toolbar tick
+  so a self-ended recording is collected and reported ("The recording ended early … saved at
+  …"). New `dev record-window`; `dev` commands now log to stderr. Live: window killed at 5 s →
+  ended early in 250 ms, 121-sample playable MP4; resize → two pool recreates, file OK; tray
+  app: toolbar gone in 0.7 s without Stop, notice shown, 3 s MP4 probes OK. Gate green, **137
+  tests**.
 - 2026-10-23: Review item (2) — config recovery + error surfacing. `Settings::load_or_recover`
   quarantines unparseable config (`config.toml.broken-<n>`), lenient hotkey deserialize
   (bad string → unbound), `sanitize()` resets a relative output folder, Settings OK validates

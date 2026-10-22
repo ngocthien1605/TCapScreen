@@ -175,10 +175,32 @@ pub fn stop() {
     drop(toolbar);
     match handle.stop() {
         Ok(path) => tracing::info!("recording saved to {}", path.display()),
+        // The file exists and is playable; the user only needs to know it is shorter than
+        // they expected and why (a closed window is informational, not a failure).
+        Err(recorder::RecorderError::EndedEarly { path, reason }) => crate::notify::warn(
+            "The recording ended early.",
+            format!(
+                "{reason}.\n\nWhat was captured up to that point is saved at:\n{}",
+                path.display()
+            ),
+        ),
         // No gate is held here (the recording was tracked by `recording`, not `busy`), so a
         // hotkey pressed while this box is up can start a new capture inside its message pump.
         // That is harmless — the failed recording is already torn down — and accepted for now.
         Err(e) => crate::notify::error("The recording could not be saved.", e),
+    }
+}
+
+/// Toolbar tick: if the recording ended on its own (the recorder thread exited because the
+/// source closed, the graphics device was lost, or a write failed), collect it now — the file
+/// is already finalized, and the toolbar must not keep counting over it.
+pub fn poll() {
+    let finished = dispatch::with_app(|a| a.recording.as_ref().map(|r| r.handle.is_finished()))
+        .flatten()
+        .unwrap_or(false);
+    if finished {
+        tracing::info!("recording ended on its own; collecting it");
+        stop();
     }
 }
 

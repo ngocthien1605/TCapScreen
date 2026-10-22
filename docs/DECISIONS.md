@@ -135,6 +135,21 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   and the extracted `wgc::frame_to_cpu` helper; `recorder` owns only the MF encode + pacing.
   The staging copy runs on the WGC pool threads behind a `Mutex<D3dDevice>` (the D3D immediate
   context is not thread-safe).
+- **Stream failure model: poll the device, never a frame clock.** WGC delivers a frame only
+  when the content changes, so "no frame for N seconds" is normal on an idle desktop and must
+  not be treated as a stall. What the stream *does* report: the GPU→CPU copy failing repeatedly
+  (a removed/reset D3D device never recovers) sends one `StreamEvent::Error` after a bounded run
+  of failures (logged sparsely, not at refresh rate); the encoder loop additionally polls
+  `CaptureStream::check_health` once a second, which asks the device for its removed-reason and,
+  for window targets, `IsWindow` — WGC was observed **not** to raise `GraphicsCaptureItem.Closed`
+  for a window killed mid-capture, so the poll is the path that actually ends such a recording.
+  On any early end the sink is still finalized and the recorder returns
+  `RecorderError::EndedEarly { path, reason }` so the user is told where the partial file is;
+  the toolbar's 500 ms tick posts `RecordPoll` so the app collects a self-ended recording
+  instead of counting over it. Source resizes recreate the frame pool at the new content size
+  (the documented sample pattern, done inside `FrameArrived` after the frame is closed); the MP4
+  sink keeps its initial dimensions, so a grown source is cropped and a shrunken one is padded
+  with black (`pack_bgra` zero-fills — `MFCreateMemoryBuffer` memory is uninitialized).
 - **CFR re-emission on the monotonic clock.** WGC sends nothing while the screen is static, so a
   write-on-arrival file would freeze/jump. A dedicated encoder thread keeps the latest frame and,
   each iteration, writes enough copies to make the emitted frame count equal

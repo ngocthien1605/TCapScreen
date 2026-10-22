@@ -215,6 +215,10 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
             unsafe {
                 let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(hwnd), None, false);
             }
+            // The same tick asks the dispatcher whether the recording ended on its own (source
+            // window closed, graphics device lost) so this toolbar does not keep counting over
+            // a recording that already finalized.
+            dispatch::post(inner.dispatch_hwnd, Action::RecordPoll);
             LRESULT(0)
         }
         WM_PAINT => {

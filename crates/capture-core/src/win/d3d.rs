@@ -72,6 +72,16 @@ impl D3dDevice {
             .unwrap_or(CaptureError::CaptureUnavailable))
     }
 
+    /// Why the device was removed (driver crash/upgrade, TDR reset, adapter unplugged), or
+    /// `None` while it is healthy. A removed device never recovers: every copy through it fails
+    /// from then on, so a long-running capture must poll this and give up.
+    pub fn removed_reason(&self) -> Option<String> {
+        // SAFETY: a query on our own live device; returns S_OK while the device is usable.
+        unsafe { self.device.GetDeviceRemovedReason() }
+            .err()
+            .map(|e| e.to_string())
+    }
+
     /// Build the WinRT `IDirect3DDevice` projection needed by the WGC frame pool.
     pub fn winrt_device(&self) -> Result<IDirect3DDevice> {
         let dxgi: IDXGIDevice = self.device.cast().map_err(map_com)?;

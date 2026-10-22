@@ -96,11 +96,22 @@ pub enum DevCmd {
     },
     /// Render the Settings dialog with defaults and auto-close it (smoke-tests the template).
     SettingsSelftest,
+    /// Record the first window whose title contains `query` for up to N seconds. Reports an
+    /// early end (window closed, device lost) distinctly from a normal stop.
+    RecordWindow {
+        /// Case-insensitive substring of the window title.
+        query: String,
+        /// Recording length in seconds (the recording ends sooner if the window closes).
+        seconds: u64,
+        /// Output .mp4 path.
+        out: PathBuf,
+    },
 }
 
 pub fn run(cmd: DevCmd) -> ExitCode {
     // Mirror the tray app's apartment (STA) so the dev commands exercise the same COM/WGC path
     // the real app uses. The capture backend's RoInitialize(MTA) attempt is tolerated.
+    crate::logging::init_stderr();
     crate::init_com_sta();
     match cmd {
         DevCmd::Config => cmd_config(),
@@ -124,6 +135,11 @@ pub fn run(cmd: DevCmd) -> ExitCode {
             out,
         } => cmd_record_monitor(index, seconds, out),
         DevCmd::MakeIcon { out } => cmd_make_icon(out),
+        DevCmd::RecordWindow {
+            query,
+            seconds,
+            out,
+        } => cmd_record_window(&query, seconds, out),
         DevCmd::ProbeMp4 { file } => cmd_probe_mp4(file),
         DevCmd::RecordGif {
             index,
@@ -544,6 +560,76 @@ fn cmd_grab_window(query: &str, out: PathBuf) -> ExitCode {
         Ok(f) => save_frame(&f, &out),
         Err(e) => {
             eprintln!("capture failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_record_window(query: &str, seconds: u64, out: PathBuf) -> ExitCode {
+    let backend = match WindowsBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let wins = match backend.windows() {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("error enumerating windows: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let needle = query.to_lowercase();
+    let Some(win) = wins
+        .iter()
+        .find(|w| w.title.to_lowercase().contains(&needle))
+    else {
+        eprintln!("no window title contains {query:?}");
+        return ExitCode::FAILURE;
+    };
+    println!("matched window: {}", win.title);
+    let cfg = recorder::RecordCfg {
+        target: CaptureTarget::Window(win.id),
+        output: recorder::RecordOutput::Mp4 {
+            fps: 30,
+            bitrate: 8_000_000,
+            audio: recorder::AudioCfg::default(),
+            cursor: false,
+        },
+        out_path: out.clone(),
+    };
+    let handle = match recorder::Recorder::new().start(cfg) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("could not start recording: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("recording up to {seconds}s to {}…", out.display());
+    let started = std::time::Instant::now();
+    // Poll like the tray's toolbar does, so an early end is noticed within a tick.
+    while started.elapsed().as_secs() < seconds && !handle.is_finished() {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let ran = started.elapsed().as_secs_f32();
+    match handle.stop() {
+        Ok(path) => {
+            println!(
+                "saved recording to {} after {ran:.1}s (stopped normally)",
+                path.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(recorder::RecorderError::EndedEarly { path, reason }) => {
+            println!(
+                "ENDED EARLY after {ran:.1}s: {reason}\nsaved what was captured to {}",
+                path.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("recording failed: {e}");
             ExitCode::FAILURE
         }
     }

@@ -72,6 +72,11 @@ From the tray **Record** submenu:
 
 Recordings are saved to the output folder with automatic names (`.mp4` / `.gif`).
 
+If the window you are recording is closed, or the graphics driver resets, the recording ends
+on its own: the toolbar disappears, everything captured up to that point is saved as a playable
+file, and a notice tells you where it is. Resizing the recorded window mid-recording is fine;
+the video keeps its starting size (a larger window is cropped, a smaller one is padded).
+
 ## Default hotkeys
 
 | Action | Default |

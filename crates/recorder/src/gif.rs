@@ -47,6 +47,11 @@ impl GifSession {
         self.paused.load(Ordering::SeqCst)
     }
 
+    /// True once the GIF thread has exited on its own (source closed, device lost, length cap).
+    pub fn is_finished(&self) -> bool {
+        self.thread.as_ref().is_none_or(|t| t.is_finished())
+    }
+
     pub fn stop(mut self) -> Result<PathBuf> {
         self.stopping.store(true, Ordering::SeqCst);
         match self.thread.take() {
@@ -92,23 +97,39 @@ fn gif_loop(cfg: RecordCfg, paused: Arc<AtomicBool>, stopping: Arc<AtomicBool>) 
     let tick = Duration::from_nanos(1_000_000_000u64 / fps as u64);
     let mut frames: Vec<Rgba> = Vec::new();
     let mut latest: Option<Frame> = None;
-    let mut closed = false;
+    let mut ended_early: Option<String> = None;
+    let mut last_health_check = Instant::now();
     let start = Instant::now();
 
-    while !stopping.load(Ordering::SeqCst) && !closed && frames.len() < max_frames {
+    while !stopping.load(Ordering::SeqCst) && ended_early.is_none() && frames.len() < max_frames {
+        let now = Instant::now();
+        if now.saturating_duration_since(last_health_check) >= Duration::from_secs(1) {
+            last_health_check = now;
+            if let Err(e) = stream.check_health() {
+                ended_early = Some(e.to_string());
+                break;
+            }
+        }
         loop {
             match rx.try_recv() {
                 Ok(StreamEvent::Frame(f)) => latest = Some(f),
                 Ok(StreamEvent::Closed) => {
-                    closed = true;
+                    ended_early = Some(crate::pipeline::SOURCE_CLOSED.into());
+                    break;
+                }
+                Ok(StreamEvent::Error(e)) => {
+                    ended_early = Some(e.to_string());
                     break;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    closed = true;
+                    ended_early = Some("the capture stream went away".into());
                     break;
                 }
             }
+        }
+        if ended_early.is_some() {
+            break;
         }
 
         if !paused.load(Ordering::SeqCst) {
@@ -124,15 +145,28 @@ fn gif_loop(cfg: RecordCfg, paused: Arc<AtomicBool>, stopping: Arc<AtomicBool>) 
     stream.stop();
 
     tracing::info!(
-        "gif capture finished: {} frames at {fps} fps ({:.1}s wall)",
+        "gif capture finished: {} frames at {fps} fps ({:.1}s wall){}",
         frames.len(),
-        start.elapsed().as_secs_f32()
+        start.elapsed().as_secs_f32(),
+        match &ended_early {
+            Some(r) => format!(" (ended early: {r})"),
+            None => String::new(),
+        }
     );
 
     if frames.is_empty() {
-        return Err(RecorderError::Capture("no frames captured for GIF".into()));
+        return Err(RecorderError::Capture(match ended_early {
+            Some(r) => format!("no frames captured for GIF ({r})"),
+            None => "no frames captured for GIF".into(),
+        }));
     }
     imaging::save_gif(&frames, fps, &cfg.out_path)
         .map_err(|e| RecorderError::Platform(format!("gif encode: {e}")))?;
-    Ok(cfg.out_path)
+    match ended_early {
+        Some(reason) => Err(RecorderError::EndedEarly {
+            path: cfg.out_path,
+            reason,
+        }),
+        None => Ok(cfg.out_path),
+    }
 }

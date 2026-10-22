@@ -46,6 +46,8 @@ pub enum Action {
     RecordPauseToggle,
     RecordGif,
     FlyoutAnnotate,
+    /// The recording toolbar's tick: check whether the recording ended on its own.
+    RecordPoll,
 }
 
 impl Action {
@@ -72,6 +74,7 @@ impl Action {
             18 => RecordPauseToggle,
             19 => RecordGif,
             20 => FlyoutAnnotate,
+            21 => RecordPoll,
             _ => return None,
         })
     }
@@ -212,6 +215,7 @@ fn handle(action: Action) {
         ExecuteRecordStart => crate::record_flow::execute_start(),
         RecordPauseToggle => crate::record_flow::toggle_pause(),
         StopRecording => crate::record_flow::stop(),
+        RecordPoll => crate::record_flow::poll(),
         OpenFolder => {
             // Clone the path out, then shell out *outside* the borrow (explorer can pump).
             if let Some(folder) = with_app(|app| app.output_folder.clone()) {
@@ -334,6 +338,7 @@ mod tests {
             RecordPauseToggle,
             RecordGif,
             FlyoutAnnotate,
+            RecordPoll,
         ];
         for a in all {
             assert_eq!(Action::from_u32(a as u32), Some(a), "{a:?}");
