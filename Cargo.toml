@@ -14,7 +14,7 @@ edition = "2021"
 rust-version = "1.90"
 license = "MIT"
 authors = ["RustShot contributors"]
-repository = "https://example.invalid/rustshot"
+repository = "https://github.com/ngocthien1605/TCapScreen"
 # Internal crates — never published to crates.io.
 publish = false
 
