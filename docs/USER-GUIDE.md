@@ -68,12 +68,21 @@ Recordings are saved to the output folder with automatic names (`.mp4` / `.gif`)
 **Note:** Windows 11's "Use PrintScreen to open Snipping Tool" setting, and other screenshot
 tools (Snipping Tool, ShareX, Screenpresso), may already own the `PrintScreen` combinations. If
 RustShot can't register a hotkey it logs a warning and keeps running — the tray menu always
-offers the same actions, and you can rebind the hotkeys in `config.toml`.
+offers the same actions, and you can rebind the hotkeys in **Settings…** (or in `config.toml`).
 
 ## Settings
 
 Tray → **Settings…** opens a dialog for the common options (cursor capture, copy-to-clipboard,
 microphone/system audio, run-at-startup, JPEG quality, video FPS, and the output folder).
+
+It also has a **Global hotkeys** section with an editable field for each of the six actions.
+Type a shortcut as `Modifier+…+Key` (for example `Ctrl+Shift+R`, or just `PrintScreen`); leave a
+field **blank** to turn that hotkey off. Supported modifiers are `Ctrl`, `Alt`, `Shift`, and
+`Win`; keys include letters, digits, `F1`–`F24`, and `PrintScreen`, `Escape`, `Enter`, `Space`,
+`Delete`, `Insert`, `PageUp`, `PageDown`. **Restore default hotkeys** resets all six to the
+table above. On **OK**, an invalid shortcut or two actions sharing the same combination are
+reported and the dialog stays open so you can fix them.
+
 Changes are saved and take effect immediately (hotkeys are re-registered, the output folder is
 updated). Everything is also editable directly in `config.toml`.
 

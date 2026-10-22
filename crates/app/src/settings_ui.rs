@@ -5,18 +5,19 @@
 
 use std::ffi::c_void;
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use config::{ImageFormat, Settings};
+use config::{HotkeyMap, ImageFormat, Settings};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     CheckDlgButton, IsDlgButtonChecked, BST_CHECKED, DLG_BUTTON_CHECK_STATE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DialogBoxIndirectParamW, EndDialog, GetDlgItemInt, GetDlgItemTextW, GetWindowLongPtrW,
-    SetDlgItemInt, SetDlgItemTextW, SetWindowLongPtrW, DLGTEMPLATE, IDCANCEL, IDOK,
-    WINDOW_LONG_PTR_INDEX, WM_CLOSE, WM_COMMAND, WM_INITDIALOG,
+    MessageBoxW, SetDlgItemInt, SetDlgItemTextW, SetWindowLongPtrW, DLGTEMPLATE, IDCANCEL, IDOK,
+    MB_ICONWARNING, MB_OK, WINDOW_LONG_PTR_INDEX, WM_CLOSE, WM_COMMAND, WM_INITDIALOG,
 };
 
 use crate::dispatch;
@@ -36,6 +37,20 @@ const EDIT_QUALITY: i32 = 1010;
 const EDIT_FPS: i32 = 1011;
 const EDIT_FOLDER: i32 = 1012;
 const BTN_BROWSE: i32 = 1013;
+// Six editable shortcut fields (in a fixed order) + a restore-to-defaults button.
+const EDIT_HK_BASE: i32 = 1020;
+const BTN_RESTORE_HK: i32 = 1030;
+
+/// Friendly labels for the six hotkey rows, in the fixed order shared by `HotkeyMap`'s fields,
+/// [`map_to_strings`], and [`strings_to_map`].
+const HK_LABELS: [&str; 6] = [
+    "Region screenshot",
+    "Window screenshot",
+    "Monitor screenshot",
+    "All monitors",
+    "Start recording",
+    "Stop recording",
+];
 
 // Standard control class atoms (prefixed with 0xFFFF in a DLGITEMTEMPLATE).
 const ATOM_BUTTON: u16 = 0x0080;
@@ -172,8 +187,8 @@ fn build_template() -> Vec<u8> {
         WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME,
         40,
         40,
-        210,
-        214,
+        250,
+        296,
         "RustShot Settings",
         9,
         "Segoe UI",
@@ -285,10 +300,46 @@ fn build_template() -> Vec<u8> {
         "Browse…",
     );
 
+    // Global-hotkeys section: a header, then one labelled, editable shortcut field per action.
+    b.item(
+        stat,
+        10,
+        162,
+        230,
+        10,
+        0xFFFF,
+        ATOM_STATIC,
+        "Global hotkeys (e.g. Ctrl+Shift+R; blank = off):",
+    );
+    for (i, label) in HK_LABELS.iter().enumerate() {
+        let y = 176 + (i as i16) * 15;
+        b.item(stat, 10, y, 85, 10, 0xFFFF, ATOM_STATIC, label);
+        b.item(
+            edit,
+            100,
+            y - 2,
+            140,
+            12,
+            (EDIT_HK_BASE + i as i32) as u16,
+            ATOM_EDIT,
+            "",
+        );
+    }
+
+    b.item(
+        btn,
+        10,
+        272,
+        110,
+        14,
+        BTN_RESTORE_HK as u16,
+        ATOM_BUTTON,
+        "Restore default hotkeys",
+    );
     b.item(
         btn | BS_DEFPUSHBUTTON,
-        100,
-        190,
+        148,
+        272,
         45,
         15,
         IDOK.0 as u16,
@@ -297,8 +348,8 @@ fn build_template() -> Vec<u8> {
     );
     b.item(
         btn,
-        152,
-        190,
+        200,
+        272,
         45,
         15,
         IDCANCEL.0 as u16,
@@ -307,6 +358,65 @@ fn build_template() -> Vec<u8> {
     );
 
     b.build()
+}
+
+/// The six shortcuts as display strings, in the fixed row order.
+fn map_to_strings(m: &HotkeyMap) -> [String; 6] {
+    [
+        m.region_screenshot.to_string(),
+        m.window_screenshot.to_string(),
+        m.monitor_screenshot.to_string(),
+        m.all_monitors_screenshot.to_string(),
+        m.region_recording.to_string(),
+        m.stop_recording.to_string(),
+    ]
+}
+
+/// Parse six shortcut strings (row order) back into a [`HotkeyMap`], rejecting unparseable
+/// entries and any duplicate binding. Returns a user-facing message on error.
+fn strings_to_map(strs: &[String; 6]) -> Result<HotkeyMap, String> {
+    let mut parsed = Vec::with_capacity(6);
+    for (i, raw) in strs.iter().enumerate() {
+        match config::Hotkey::from_str(raw) {
+            Ok(h) => parsed.push(h),
+            Err(_) => {
+                return Err(format!(
+                    "\"{}\" is not a valid shortcut for {}.",
+                    raw.trim(),
+                    HK_LABELS[i]
+                ))
+            }
+        }
+    }
+    let map = HotkeyMap {
+        region_screenshot: parsed[0].clone(),
+        window_screenshot: parsed[1].clone(),
+        monitor_screenshot: parsed[2].clone(),
+        all_monitors_screenshot: parsed[3].clone(),
+        region_recording: parsed[4].clone(),
+        stop_recording: parsed[5].clone(),
+    };
+    if let Some((a, b)) = map.conflicts().first() {
+        let la = label_for(a);
+        let lb = label_for(b);
+        return Err(format!(
+            "{la} and {lb} are assigned the same shortcut. Please make them different."
+        ));
+    }
+    Ok(map)
+}
+
+/// Map a `HotkeyMap::entries()` machine name to its friendly label.
+fn label_for(name: &str) -> &'static str {
+    match name {
+        "region_screenshot" => HK_LABELS[0],
+        "window_screenshot" => HK_LABELS[1],
+        "monitor_screenshot" => HK_LABELS[2],
+        "all_monitors_screenshot" => HK_LABELS[3],
+        "region_recording" => HK_LABELS[4],
+        "stop_recording" => HK_LABELS[5],
+        _ => "an action",
+    }
 }
 
 /// Settings passed into the dialog and the edited result passed back out.
@@ -352,6 +462,13 @@ pub fn open() {
 
     // Release the gate before applying (apply re-enters `with_app` on its own).
     dispatch::with_app(|a| a.busy = false);
+
+    if ret == -1 {
+        // SAFETY: immediately reads the thread's last-error after the failed call.
+        let err = unsafe { GetLastError() };
+        tracing::error!("settings dialog failed to open (DialogBoxIndirectParamW = -1, {err:?})");
+        return;
+    }
 
     if ret == IDOK.0 as isize {
         if let Some(new) = draft.result.take() {
@@ -400,16 +517,27 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
             if id == IDOK.0 {
-                // SAFETY: recover the Draft and record the gathered settings.
+                // SAFETY: recover the Draft, validate, and record the gathered settings. On a
+                // validation error we warn and keep the dialog open instead of closing.
                 unsafe {
                     let ptr =
                         GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(DWLP_USER)) as *mut Draft;
-                    if !ptr.is_null() {
-                        let d = &mut *ptr;
-                        d.result = Some(gather(hwnd, &d.initial));
+                    if ptr.is_null() {
+                        let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                        return 1;
                     }
-                    let _ = EndDialog(hwnd, IDOK.0 as isize);
+                    let d = &mut *ptr;
+                    match try_gather(hwnd, &d.initial) {
+                        Ok(s) => {
+                            d.result = Some(s);
+                            let _ = EndDialog(hwnd, IDOK.0 as isize);
+                        }
+                        Err(msg) => warn_box(hwnd, &msg),
+                    }
                 }
+                1
+            } else if id == BTN_RESTORE_HK {
+                restore_hotkeys(hwnd);
                 1
             } else if id == IDCANCEL.0 {
                 // SAFETY: close with a cancel result.
@@ -465,6 +593,37 @@ fn populate(hwnd: HWND, s: &Settings) {
             .to_string();
         let wide: Vec<u16> = folder.encode_utf16().chain([0]).collect();
         let _ = SetDlgItemTextW(hwnd, EDIT_FOLDER, PCWSTR(wide.as_ptr()));
+
+        for (i, text) in map_to_strings(&s.hotkeys).iter().enumerate() {
+            let w: Vec<u16> = text.encode_utf16().chain([0]).collect();
+            let _ = SetDlgItemTextW(hwnd, EDIT_HK_BASE + i as i32, PCWSTR(w.as_ptr()));
+        }
+    }
+}
+
+/// Reset the six shortcut fields to the built-in defaults (does not close the dialog).
+fn restore_hotkeys(hwnd: HWND) {
+    for (i, text) in map_to_strings(&HotkeyMap::default()).iter().enumerate() {
+        let w: Vec<u16> = text.encode_utf16().chain([0]).collect();
+        // SAFETY: sets our own child edit controls' text.
+        unsafe {
+            let _ = SetDlgItemTextW(hwnd, EDIT_HK_BASE + i as i32, PCWSTR(w.as_ptr()));
+        }
+    }
+}
+
+/// Show a modal warning over the dialog (used for validation failures on OK).
+fn warn_box(hwnd: HWND, msg: &str) {
+    let text: Vec<u16> = msg.encode_utf16().chain([0]).collect();
+    let title: Vec<u16> = "RustShot Settings".encode_utf16().chain([0]).collect();
+    // SAFETY: standard modal message box owned by the settings dialog.
+    unsafe {
+        MessageBoxW(
+            Some(hwnd),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONWARNING,
+        );
     }
 }
 
@@ -473,7 +632,9 @@ fn is_checked(hwnd: HWND, id: i32) -> bool {
     unsafe { IsDlgButtonChecked(hwnd, id) == BST_CHECKED.0 }
 }
 
-fn gather(hwnd: HWND, initial: &Settings) -> Settings {
+/// Read every control into a `Settings`, validating the hotkeys. Returns a user-facing message
+/// (shown in a warning box, dialog left open) if a shortcut is unparseable or two conflict.
+fn try_gather(hwnd: HWND, initial: &Settings) -> Result<Settings, String> {
     let mut s = initial.clone();
     s.screenshot.include_cursor = is_checked(hwnd, CHK_CURSOR);
     s.screenshot.copy_to_clipboard = is_checked(hwnd, CHK_CLIP);
@@ -505,8 +666,11 @@ fn gather(hwnd: HWND, initial: &Settings) -> Settings {
         PathBuf::from(folder.trim())
     };
 
+    let hk_strs: [String; 6] = std::array::from_fn(|i| get_text(hwnd, EDIT_HK_BASE + i as i32));
+    s.hotkeys = strings_to_map(&hk_strs)?;
+
     s.sanitize();
-    s
+    Ok(s)
 }
 
 fn get_text(hwnd: HWND, id: i32) -> String {
@@ -553,7 +717,55 @@ mod tests {
     #[test]
     fn real_template_builds_with_expected_item_count() {
         let t = build_template();
-        // 6 checkboxes + 3 labels + 2 edits + Browse + OK + Cancel = 15.
-        assert_eq!(u16::from_le_bytes([t[8], t[9]]), 15);
+        // Base 15 (6 checkboxes + 3 labels + 3 edits + Browse + OK + Cancel) plus the hotkeys
+        // section: 1 header + 6 labels + 6 edits + Restore = 14 -> 29.
+        assert_eq!(u16::from_le_bytes([t[8], t[9]]), 29);
+    }
+
+    #[test]
+    fn hotkey_map_strings_round_trip() {
+        let m = HotkeyMap::default();
+        let back = strings_to_map(&map_to_strings(&m)).unwrap();
+        assert_eq!(back, m);
+    }
+
+    #[test]
+    fn restore_strings_match_defaults() {
+        assert_eq!(
+            map_to_strings(&HotkeyMap::default()),
+            [
+                "PrintScreen",
+                "Ctrl+PrintScreen",
+                "Alt+PrintScreen",
+                "Shift+PrintScreen",
+                "Ctrl+Shift+R",
+                "Ctrl+Shift+S",
+            ]
+            .map(String::from)
+        );
+    }
+
+    #[test]
+    fn strings_to_map_rejects_bad_shortcut() {
+        let mut strs = map_to_strings(&HotkeyMap::default());
+        strs[0] = "Ctrl+Alt+".to_string(); // modifier with no main key
+        assert!(strings_to_map(&strs).is_err());
+    }
+
+    #[test]
+    fn strings_to_map_detects_conflict() {
+        let mut strs = map_to_strings(&HotkeyMap::default());
+        // Bind two different actions to the same combination.
+        strs[0] = "Ctrl+Shift+R".to_string();
+        assert_eq!(strs[4], "Ctrl+Shift+R");
+        assert!(strings_to_map(&strs).is_err());
+    }
+
+    #[test]
+    fn blank_shortcut_is_allowed_as_unbound() {
+        let mut strs = map_to_strings(&HotkeyMap::default());
+        strs[0] = String::new();
+        let m = strings_to_map(&strs).unwrap();
+        assert!(m.region_screenshot.is_empty());
     }
 }

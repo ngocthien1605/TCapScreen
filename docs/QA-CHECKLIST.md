@@ -50,5 +50,11 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 
 ## M6/M7
 - [ ] Settings UI edits persist and take effect.
+- [ ] Hotkeys section: editing a shortcut field re-registers that hotkey on OK; a blank field
+      unbinds it; an invalid entry or a duplicate combination is reported and the dialog stays
+      open; "Restore default hotkeys" resets all six fields.
+- [ ] Hotkeys "Modify" button: capture dialog records the pressed combination (incl.
+      `PrintScreen`), Alt-combos, and Cancel leaves the field unchanged; the overlay never opens
+      while the capture dialog is up.
 - [ ] Run-at-startup toggle adds/removes the `Run` key (opt-in).
 - [ ] Installer produces a working Start-menu app on a clean Windows 11 VM; portable zip runs.
