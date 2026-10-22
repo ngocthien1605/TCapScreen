@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+*.pdb
+# Local dev capture outputs
+/dev-out
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.gif
+# Keep committed sample/fixture assets explicitly if ever needed
+!docs/**/*.png

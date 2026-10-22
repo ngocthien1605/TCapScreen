@@ -1,0 +1,15 @@
+[package]
+name = "recorder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Video recording (Media Foundation H.264), audio capture/mix, muxing, and GIF export."
+
+[lints]
+workspace = true
+
+[dependencies]
+capture-core.workspace = true
+thiserror.workspace = true

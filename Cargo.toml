@@ -1,0 +1,76 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/capture-core",
+    "crates/recorder",
+    "crates/imaging",
+    "crates/config",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+authors = ["RustShot contributors"]
+repository = "https://example.invalid/rustshot"
+
+# Centralised, exact-ish pins. Cargo.lock records the resolved exact versions.
+# Versions verified against crates.io at build time (2026-10-22).
+[workspace.dependencies]
+# Internal crates
+capture-core = { path = "crates/capture-core" }
+recorder = { path = "crates/recorder" }
+imaging = { path = "crates/imaging" }
+config = { path = "crates/config" }
+
+# Error handling
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+
+# Serialisation / config
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-appender = "0.2.5"
+
+# Paths / time
+directories = "6.0.0"
+time = { version = "0.3.55", features = ["formatting", "macros", "local-offset"] }
+
+# Imaging
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+
+# Windows platform
+windows = "0.62.2"
+
+# Shell / UI
+tray-icon = "0.26.1"
+muda = "0.21.2"
+global-hotkey = "0.9.0"
+arboard = { version = "3.7.0", default-features = false }
+rfd = "0.17.2"
+
+# CLI (dev commands)
+clap = { version = "4.5.51", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Deny foot-guns the prompt calls out (no unwrap/expect on runtime paths).
+# Tests are exempt via #[cfg(test)] modules + explicit allows where needed.
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,16 @@
+[package]
+name = "imaging"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Image conversion, crop, PNG/JPEG encode, thumbnailing, and output naming."
+
+[lints]
+workspace = true
+
+[dependencies]
+capture-core.workspace = true
+image.workspace = true
+thiserror.workspace = true
