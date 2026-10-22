@@ -72,14 +72,28 @@ fn encode_loop(
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
 
-    let (fps, bitrate, cursor) = match cfg.output {
+    let (fps, bitrate, cursor, audio_cfg) = match cfg.output {
         RecordOutput::Mp4 {
             fps,
             bitrate,
             cursor,
-            ..
-        } => (fps, bitrate, cursor),
+            audio,
+        } => (fps, bitrate, cursor, audio),
         RecordOutput::Gif { .. } => return Err(RecorderError::NotImplemented),
+    };
+
+    // Optional audio capture. A dev/test env var injects a sine tone into the render keep-alive
+    // so loopback has a known signal to prove the path end-to-end.
+    let want_audio = audio_cfg.microphone || audio_cfg.system_audio;
+    let tone_hz = std::env::var("RUSTSHOT_TEST_TONE_HZ")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok());
+    let (audio_engine, audio_rx, audio_available) = if want_audio {
+        let (eng, rx, avail) =
+            crate::audio::AudioEngine::start(audio_cfg.system_audio, audio_cfg.microphone, tone_hz);
+        (Some(eng), Some(rx), avail)
+    } else {
+        (None, None, false)
     };
 
     let (tx, rx) = mpsc::channel::<StreamEvent>();
@@ -100,7 +114,7 @@ fn encode_loop(
     }
 
     let path_str = cfg.out_path.to_string_lossy().to_string();
-    let sink = match VideoSink::new(&path_str, w, h, fps, bitrate) {
+    let sink = match VideoSink::new(&path_str, w, h, fps, bitrate, audio_available) {
         Ok(s) => s,
         Err(e) => {
             stream.stop();
@@ -115,6 +129,8 @@ fn encode_loop(
     let captured = AtomicU64::new(1);
     let mut emitted: u64 = 0;
     let mut closed = false;
+    // Audio uses a sample-count clock (can't drift against the video index clock).
+    let mut audio_frames: i64 = 0;
 
     // CFR driven by the monotonic clock: the number of frames that should exist by now is
     // `active_elapsed / frame_dur`. We re-emit the latest frame to catch up, so the output's
@@ -125,6 +141,11 @@ fn encode_loop(
     let mut was_paused = false;
     let tick_nanos = tick.as_nanos().max(1);
     let max_catch_up = (fps as i64).max(1) * 2;
+
+    // Drop audio captured during video startup so both timelines begin at t = 0 (A/V sync).
+    if let Some(arx) = &audio_rx {
+        while arx.try_recv().is_ok() {}
+    }
 
     let result = (|| -> Result<()> {
         while !stopping.load(Ordering::SeqCst) && !closed {
@@ -172,18 +193,37 @@ fn encode_loop(
                     n += 1;
                 }
             }
+
+            // Audio: write while recording, discard while paused (keeps A and V aligned).
+            if let Some(arx) = &audio_rx {
+                while let Ok(chunk) = arx.try_recv() {
+                    if is_paused {
+                        continue;
+                    }
+                    let ts = audio_frames * 10_000_000 / crate::mf::AUDIO_RATE as i64;
+                    if let Err(e) = sink.write_audio(&chunk, ts) {
+                        tracing::warn!("audio write failed: {e}");
+                    }
+                    audio_frames += (chunk.len() / crate::mf::AUDIO_CHANNELS as usize) as i64;
+                }
+            }
+
             std::thread::sleep(tick);
         }
         Ok(())
     })();
 
     stream.stop();
+    if let Some(eng) = audio_engine {
+        eng.stop();
+    }
 
     let cap = captured.load(Ordering::Relaxed);
     let dropped = cap.saturating_sub(emitted);
+    let audio_secs = audio_frames as f64 / crate::mf::AUDIO_RATE as f64;
     tracing::info!(
         "recording finished: {emitted} frames emitted, {cap} captured (~{dropped} coalesced), \
-         {w}x{h} @ {fps}fps{}",
+         {w}x{h} @ {fps}fps, audio {audio_secs:.1}s{}",
         if closed { " (source closed)" } else { "" }
     );
 

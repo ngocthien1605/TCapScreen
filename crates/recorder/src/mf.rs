@@ -8,11 +8,14 @@ use std::sync::Once;
 use capture_core::Frame;
 use windows::core::PCWSTR;
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFMediaType, IMFSinkWriter, MFCreateAttributes, MFCreateMediaType,
-    MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video, MFStartup,
-    MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MFSTARTUP_FULL,
-    MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+    IMFAttributes, IMFMediaType, IMFSinkWriter, MFAudioFormat_AAC, MFAudioFormat_PCM,
+    MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
+    MFCreateSinkWriterFromURL, MFMediaType_Audio, MFMediaType_Video, MFStartup, MFVideoFormat_H264,
+    MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MFSTARTUP_FULL,
+    MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
+    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
+    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
     MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_DISABLE_THROTTLING,
 };
 
@@ -40,10 +43,15 @@ fn set_u64_pair(
     unsafe { ty.SetUINT64(key, packed) }.map_err(mf)
 }
 
-/// An H.264/MP4 sink that accepts BGRA frames.
+/// Canonical audio format muxed alongside the video.
+pub const AUDIO_RATE: u32 = 48_000;
+pub const AUDIO_CHANNELS: u32 = 2;
+
+/// An H.264/MP4 sink that accepts BGRA frames (and optionally 48 kHz stereo PCM16 audio).
 pub struct VideoSink {
     writer: IMFSinkWriter,
     stream_index: u32,
+    audio_index: Option<u32>,
     width: u32,
     height: u32,
     frame_dur: i64,
@@ -51,12 +59,14 @@ pub struct VideoSink {
 
 impl VideoSink {
     /// Create a sink writing `path` at `width`×`height` (must be even), `fps`, and `bitrate`.
+    /// When `audio` is true, an AAC stream (48 kHz stereo) is added for [`write_audio`].
     pub fn new(
         path: &str,
         width: u32,
         height: u32,
         fps: u32,
         bitrate: u32,
+        audio: bool,
     ) -> Result<VideoSink, RecorderError> {
         MF_STARTUP.call_once(|| {
             // SAFETY: process-wide MF init; matched by no explicit shutdown (fine at exit).
@@ -125,16 +135,99 @@ impl VideoSink {
                 .SetInputMediaType(stream_index, &in_type, None)
                 .map_err(mf)?;
 
+            // Optional AAC audio stream (48 kHz stereo 16-bit). Added before BeginWriting.
+            let audio_index = if audio {
+                let aac_out = MFCreateMediaType().map_err(mf)?;
+                aac_out
+                    .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                    .map_err(mf)?;
+                aac_out
+                    .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)
+                    .map_err(mf)?;
+                aac_out
+                    .SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, AUDIO_RATE)
+                    .map_err(mf)?;
+                aac_out
+                    .SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, AUDIO_CHANNELS)
+                    .map_err(mf)?;
+                aac_out
+                    .SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)
+                    .map_err(mf)?;
+                // 24000 B/s = 192 kbps (the AAC encoder only accepts 12k/16k/20k/24k).
+                aac_out
+                    .SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 24_000)
+                    .map_err(mf)?;
+                let aidx = writer.AddStream(&aac_out).map_err(mf)?;
+
+                let pcm_in = MFCreateMediaType().map_err(mf)?;
+                pcm_in
+                    .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                    .map_err(mf)?;
+                pcm_in
+                    .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+                    .map_err(mf)?;
+                pcm_in
+                    .SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, AUDIO_RATE)
+                    .map_err(mf)?;
+                pcm_in
+                    .SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, AUDIO_CHANNELS)
+                    .map_err(mf)?;
+                pcm_in
+                    .SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)
+                    .map_err(mf)?;
+                pcm_in
+                    .SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 4)
+                    .map_err(mf)?;
+                pcm_in
+                    .SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, AUDIO_RATE * 4)
+                    .map_err(mf)?;
+                writer.SetInputMediaType(aidx, &pcm_in, None).map_err(mf)?;
+                Some(aidx)
+            } else {
+                None
+            };
+
             writer.BeginWriting().map_err(mf)?;
 
             Ok(VideoSink {
                 writer,
                 stream_index,
+                audio_index,
                 width,
                 height,
                 frame_dur,
             })
         }
+    }
+
+    /// Write a chunk of interleaved-stereo PCM16 audio at `time_100ns` (no-op if no audio stream).
+    pub fn write_audio(&self, pcm: &[i16], time_100ns: i64) -> Result<(), RecorderError> {
+        let Some(aidx) = self.audio_index else {
+            return Ok(());
+        };
+        if pcm.is_empty() {
+            return Ok(());
+        }
+        let frames = (pcm.len() / AUDIO_CHANNELS as usize) as i64;
+        let dur = frames * 10_000_000 / AUDIO_RATE as i64;
+        let bytes = pcm.len() * 2;
+        // SAFETY: fill an MF buffer with the PCM bytes and write it to the audio stream.
+        unsafe {
+            let buffer = MFCreateMemoryBuffer(bytes as u32).map_err(mf)?;
+            let mut ptr: *mut u8 = null_mut();
+            buffer.Lock(&mut ptr, None, None).map_err(mf)?;
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(pcm.as_ptr() as *const u8, ptr, bytes);
+            }
+            buffer.Unlock().map_err(mf)?;
+            buffer.SetCurrentLength(bytes as u32).map_err(mf)?;
+            let sample = MFCreateSample().map_err(mf)?;
+            sample.AddBuffer(&buffer).map_err(mf)?;
+            sample.SetSampleTime(time_100ns).map_err(mf)?;
+            sample.SetSampleDuration(dur).map_err(mf)?;
+            self.writer.WriteSample(aidx, &sample).map_err(mf)?;
+        }
+        Ok(())
     }
 
     /// The per-frame duration in 100-ns units.

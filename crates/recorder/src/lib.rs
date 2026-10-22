@@ -12,6 +12,8 @@ use capture_core::CaptureTarget;
 use thiserror::Error;
 
 #[cfg(windows)]
+mod audio;
+#[cfg(windows)]
 mod mf;
 #[cfg(windows)]
 mod pipeline;

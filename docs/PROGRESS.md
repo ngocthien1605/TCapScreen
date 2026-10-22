@@ -106,9 +106,34 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 - 🔬 **Actual playback in VLC/WMP, and the interactive countdown/toolbar/pause buttons, are
   visual and remain manual QA** (QA-CHECKLIST M3). SourceReader decoding is the headless proxy.
 
-## M4 — Audio  ⬜ Next.
+## M4 — Audio  ✅ (system path verified with a synthetic tone; mic = manual QA)
 
-## M5–M7  ⬜ Not started.
+| Item | Status | How verified |
+|---|---|---|
+| WASAPI system (render-endpoint loopback) capture | ✅ | `record-audio-test` → probe RMS 0.21, dominant ≈1020 Hz |
+| Silence keep-alive render client (loopback doesn't starve) | ✅ | same path (doubles as tone source in the test) |
+| WASAPI microphone (default capture endpoint) | ✅ (code) | same code path minus loopback; **needs a mic signal → 🔬** |
+| Mix sources → 48 kHz stereo, linear resample, soft-clamp | ✅ | mixed path builds; single-source verified |
+| AAC stream added to the MP4 (MF `IMFSinkWriter`, PCM16 in) | ✅ | `probe-mp4` decodes an audio stream |
+| Sample-count audio clock (can't drift vs the video index clock) | ✅ | audio 4.61 s vs video 4.57 s (~42 ms) |
+| A/V start alignment (pre-roll discarded at loop start) | ✅ | skew dropped from ~0.43 s to ~0.04 s |
+| Pause drops audio (stays aligned with paused video) | ✅ (code) | same pause gate as video |
+| Graceful "no audio device" → video-only | ✅ (code) | setup failure logs + records video-only |
+| Audio probe (RMS + zero-crossing dominant Hz) | ✅ | `probe-mp4` prints it |
+
+**Gate (all green):** build ✅ · clippy -D warnings ✅ · fmt ✅ · **70 unit tests pass**.
+
+**Done-when (M4):** audio muxes correctly and stays in sync.
+- ✅ **verified live**: `dev record-audio-test 0 5 audio.mp4` renders a 1 kHz tone into the
+  render keep-alive, captures it via loopback, encodes AAC, muxes, and `probe-mp4` decodes the
+  **audio stream at 48 kHz/2ch, RMS 0.21 (not silence), dominant ≈1020 Hz** (≈1 kHz within the
+  zero-crossing estimate's tolerance), with **audio duration within ~42 ms of the video**.
+- 🔬 **Microphone capture and mic+system mixing need a live mic signal**, and A/V lip-sync by
+  ear is inherently manual (QA-CHECKLIST M4). The system path proves capture→mix→AAC→mux→decode.
+
+## M5 — GIF  ⬜ Next.
+
+## M6–M7  ⬜ Not started.
 
 ---
 

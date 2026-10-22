@@ -66,6 +66,12 @@ pub enum DevCmd {
         /// The .mp4 file to probe.
         file: PathBuf,
     },
+    /// Record a monitor with system audio while rendering a 1 kHz tone (tests the audio path).
+    RecordAudioTest {
+        index: usize,
+        seconds: u64,
+        out: PathBuf,
+    },
     /// Record a monitor with a mid-recording pause (tests pause accounting).
     RecordPauseTest {
         index: usize,
@@ -105,6 +111,11 @@ pub fn run(cmd: DevCmd) -> ExitCode {
             out,
         } => cmd_record_monitor(index, seconds, out),
         DevCmd::ProbeMp4 { file } => cmd_probe_mp4(file),
+        DevCmd::RecordAudioTest {
+            index,
+            seconds,
+            out,
+        } => cmd_record_audio_test(index, seconds, out),
         DevCmd::RecordPauseTest {
             index,
             seconds,
@@ -242,20 +253,87 @@ fn cmd_record_monitor(index: usize, seconds: u64, out: PathBuf) -> ExitCode {
 
 fn cmd_probe_mp4(file: PathBuf) -> ExitCode {
     let png = file.with_extension("frame0.png");
-    match recorder::probe::probe(&file.to_string_lossy(), Some(&png)) {
+    let path = file.to_string_lossy().to_string();
+    match recorder::probe::probe(&path, Some(&png)) {
         Ok(info) => {
             println!(
-                "probe OK: {}x{}  samples={}  last_ts={}ms  frame0={}",
+                "video OK: {}x{}  samples={}  last_ts={}ms  frame0={}",
                 info.width,
                 info.height,
                 info.sample_count,
                 info.last_timestamp_100ns / 10_000,
                 png.display()
             );
+            match recorder::probe::probe_audio(&path) {
+                Some(a) => println!(
+                    "audio: {}Hz {}ch  frames={}  rms={:.3}  dominant≈{:.0}Hz",
+                    a.sample_rate, a.channels, a.frames, a.rms, a.dominant_hz
+                ),
+                None => println!("audio: none"),
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
             eprintln!("probe failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_record_audio_test(index: usize, seconds: u64, out: PathBuf) -> ExitCode {
+    let backend = match WindowsBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mons = match backend.monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(mon) = mons.get(index) else {
+        eprintln!("no monitor at index {index}");
+        return ExitCode::FAILURE;
+    };
+    // Inject a 1 kHz tone into the render keep-alive so loopback captures a known signal.
+    std::env::set_var("RUSTSHOT_TEST_TONE_HZ", "1000");
+    let cfg = recorder::RecordCfg {
+        target: CaptureTarget::Monitor(mon.id),
+        output: recorder::RecordOutput::Mp4 {
+            fps: 30,
+            bitrate: 8_000_000,
+            audio: recorder::AudioCfg {
+                microphone: false,
+                system_audio: true,
+                microphone_device: None,
+            },
+            cursor: false,
+        },
+        out_path: out.clone(),
+    };
+    let handle = match recorder::Recorder::new().start(cfg) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("start failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "recording {seconds}s with a 1 kHz system tone → {}",
+        out.display()
+    );
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    match handle.stop() {
+        Ok(p) => {
+            println!("saved {}", p.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("stop failed: {e}");
             ExitCode::FAILURE
         }
     }

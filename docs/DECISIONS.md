@@ -131,3 +131,28 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 - **Toolbar/countdown reuse the flyout window pattern** (small topmost Win32 tool window,
   `SetTimer` ticks, buttons post `Record*`/`StopRecording` actions). `AppState` gains
   `recording: Option<Recording>` and `pending_record`.
+
+## M4 — Audio
+
+- **Raw WASAPI for both mic and system, not cpal.** cpal 0.18 can't do loopback, so one raw
+  WASAPI code path covers both: system = `AUDCLNT_STREAMFLAGS_LOOPBACK` on the default **render**
+  endpoint; mic = default **capture** endpoint. No cpal dependency.
+- **Silence keep-alive render client.** WASAPI loopback delivers nothing (or `SILENT` buffers)
+  when no app is playing, which would starve/short the audio track. A render client on the same
+  endpoint is opened alongside and fed continuously — silence in normal use, and (via the
+  `RUSTSHOT_TEST_TONE_HZ` env var) a sine tone in the functional test so loopback has a known
+  signal to prove the path.
+- **Canonical internal format 48 kHz stereo f32**, linear-resampled per source (mic may be
+  44.1 kHz), mixed by summing with a soft clamp, then converted to **PCM16** for the sink — MF's
+  AAC encoder rejects float input on some systems.
+- **Sample-count audio clock.** Audio sample time is `frames_written * 10^7 / 48000`, never wall
+  time, so it cannot drift against the video's index clock. Pre-roll captured during video
+  startup is discarded at the loop start so both timelines begin at t = 0 (measured skew fell
+  from ~0.43 s to ~0.04 s). Pause drops audio packets, matching the paused video.
+- **AAC muxed via the same `IMFSinkWriter`** (`AddStream` before `BeginWriting`), 48 kHz stereo,
+  192 kbps (`AVG_BYTES_PER_SECOND = 24000`; the encoder only accepts 12k/16k/20k/24k).
+- **Graceful degradation.** If the endpoint/device is missing, audio setup logs and the
+  recording proceeds video-only rather than failing.
+- **Verification by signal, not ears** (`dev record-audio-test` + extended `probe-mp4`): decode
+  the audio stream and assert RMS > 0.1 (present, not silence) and a zero-crossing dominant
+  frequency near the rendered tone. Lip-sync by ear and live mic input remain manual QA.
