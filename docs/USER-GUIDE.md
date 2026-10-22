@@ -45,7 +45,7 @@ The flyout auto-dismisses after a few seconds.
 
 From the tray **Record** submenu:
 
-- **Record video (region/window)** — pick a region or window (same overlay as screenshots),
+- **Record video (region/window)** — pick a region or window (the same crosshair overlay as Region screenshots),
   then recording starts (after the optional countdown) and a compact always-on-top toolbar
   appears with the elapsed time, **Pause/Resume**, and **Stop**. Output is an MP4 (H.264),
   optionally with microphone and/or system audio. **Stop** finalizes a playable file.

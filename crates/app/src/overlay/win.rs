@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
     SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU,
     IDC_CROSS, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -251,7 +251,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
-        WM_RBUTTONDOWN => {
+        // Swallow the press and cancel on release, so the button-up isn't delivered to the window
+        // underneath (which would pop up its context menu after the overlay closes).
+        WM_RBUTTONDOWN => LRESULT(0),
+        WM_RBUTTONUP => {
             let outcome = ctx.state.on_cancel();
             ctx.finish(outcome, hwnd);
             LRESULT(0)
