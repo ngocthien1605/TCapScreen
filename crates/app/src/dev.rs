@@ -66,6 +66,17 @@ pub enum DevCmd {
         /// The .mp4 file to probe.
         file: PathBuf,
     },
+    /// Record a monitor with a mid-recording pause (tests pause accounting).
+    RecordPauseTest {
+        index: usize,
+        /// Total wall-clock seconds.
+        seconds: u64,
+        /// Pause at this second.
+        pause_at: u64,
+        /// Resume at this second.
+        resume_at: u64,
+        out: PathBuf,
+    },
 }
 
 pub fn run(cmd: DevCmd) -> ExitCode {
@@ -94,6 +105,83 @@ pub fn run(cmd: DevCmd) -> ExitCode {
             out,
         } => cmd_record_monitor(index, seconds, out),
         DevCmd::ProbeMp4 { file } => cmd_probe_mp4(file),
+        DevCmd::RecordPauseTest {
+            index,
+            seconds,
+            pause_at,
+            resume_at,
+            out,
+        } => cmd_record_pause_test(index, seconds, pause_at, resume_at, out),
+    }
+}
+
+fn cmd_record_pause_test(
+    index: usize,
+    seconds: u64,
+    pause_at: u64,
+    resume_at: u64,
+    out: PathBuf,
+) -> ExitCode {
+    let backend = match WindowsBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mons = match backend.monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error enumerating monitors: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(mon) = mons.get(index) else {
+        eprintln!("no monitor at index {index}");
+        return ExitCode::FAILURE;
+    };
+    let cfg = recorder::RecordCfg {
+        target: CaptureTarget::Monitor(mon.id),
+        output: recorder::RecordOutput::Mp4 {
+            fps: 30,
+            bitrate: 8_000_000,
+            audio: recorder::AudioCfg::default(),
+            cursor: false,
+        },
+        out_path: out.clone(),
+    };
+    let handle = match recorder::Recorder::new().start(cfg) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("start failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    use std::time::Duration;
+    println!(
+        "recording {seconds}s, paused {pause_at}..{resume_at}s → {}",
+        out.display()
+    );
+    std::thread::sleep(Duration::from_secs(pause_at));
+    let _ = handle.pause();
+    println!("  paused");
+    std::thread::sleep(Duration::from_secs(resume_at - pause_at));
+    let _ = handle.resume();
+    println!("  resumed");
+    std::thread::sleep(Duration::from_secs(seconds - resume_at));
+    match handle.stop() {
+        Ok(p) => {
+            println!(
+                "saved {} (expected active ≈ {}s)",
+                p.display(),
+                seconds - (resume_at - pause_at)
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("stop failed: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

@@ -90,7 +90,7 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 | Top-down orientation (positive input stride) | ✅ | frame-0 vs live grab: top bright in both (not flipped) |
 | Finalize-on-drop / on-stop (writes `moov`) | ✅ | files play/decode; Drop calls stop() |
 | Dropped/coalesced-frame logging | ✅ | log line (captured vs emitted) |
-| Pause/resume (clock stops; output excludes paused time) | ✅ (code) | atomics + toolbar; interactive = 🔬 |
+| Pause/resume (clock stops; output excludes paused time) | ✅ | `record-pause-test 0 6 2 4` → 3.6 s output (≈ 5.6 s baseline − 2 s paused) |
 | Region/window/monitor targets | ✅ | monitor via `dev record-monitor`; region/window via overlay target-select |
 | Source-closed → stop + finalize | ✅ (code) | WGC `Closed` event path; QA item for the live case |
 | Countdown + compact always-on-top toolbar (elapsed + Pause/Stop) | 🔬 | compiles + clippy-clean; **visual → manual QA** |

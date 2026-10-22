@@ -120,8 +120,9 @@ fn encode_loop(
     // `active_elapsed / frame_dur`. We re-emit the latest frame to catch up, so the output's
     // duration tracks real (unpaused) wall-clock time rather than drifting with sleep latency.
     let start = Instant::now();
-    let mut last = start;
     let mut paused_accum = Duration::ZERO;
+    let mut pause_started: Option<Instant> = None;
+    let mut was_paused = false;
     let tick_nanos = tick.as_nanos().max(1);
     let max_catch_up = (fps as i64).max(1) * 2;
 
@@ -129,10 +130,15 @@ fn encode_loop(
         while !stopping.load(Ordering::SeqCst) && !closed {
             let now = Instant::now();
             let is_paused = paused.load(Ordering::SeqCst);
-            if is_paused {
-                paused_accum += now.saturating_duration_since(last);
+            // Accumulate whole pause spans at their edges so `active` time is exact.
+            if is_paused && !was_paused {
+                pause_started = Some(now);
+            } else if !is_paused && was_paused {
+                if let Some(ps) = pause_started.take() {
+                    paused_accum += now.saturating_duration_since(ps);
+                }
             }
-            last = now;
+            was_paused = is_paused;
 
             // Drain to the newest available frame (CFR: we only keep the latest).
             loop {
