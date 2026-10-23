@@ -180,7 +180,7 @@ pub fn stop() {
         // Saved, but without the sound the user asked for (a missing or busy microphone, a
         // device that stopped mid-way): say so now rather than let them find a silent file.
         Ok(path) => crate::notify::warn(
-            "The recording was saved, but some of its sound is missing.",
+            "The recording was saved, but its sound was not recorded as set up.",
             format!("{sound}\n\nThe file is saved at:\n{}", path.display()),
         ),
         // The file exists and is playable; the user only needs to know it is shorter than

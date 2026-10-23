@@ -38,6 +38,8 @@ pub const CHANNELS: usize = 2;
 /// How long device setup may take before the recording goes ahead without sound. Setup is a
 /// handful of COM calls, but a Bluetooth headset switching profile can take seconds.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long stopping waits for a device setup that never reported in before detaching it.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 // KSDATAFORMAT_SUBTYPE_{PCM,IEEE_FLOAT}: {0000000X-0000-0010-8000-00aa00389b71}.
 const SUBTYPE_PCM: GUID = GUID::from_values(
@@ -70,6 +72,9 @@ pub struct AudioEngine {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     ready: Receiver<bool>,
+    /// Device setup has finished (the thread reported in), so joining it cannot block on a
+    /// stuck device.
+    settled: bool,
     notes: Notes,
 }
 
@@ -105,6 +110,7 @@ impl AudioEngine {
                 stop,
                 handle,
                 ready: ready_rx,
+                settled: false,
                 notes,
             },
             chunk_rx,
@@ -120,7 +126,10 @@ impl AudioEngine {
         }
         let timeout = deadline.saturating_duration_since(Instant::now());
         match self.ready.recv_timeout(timeout) {
-            Ok(ok) => ok,
+            Ok(ok) => {
+                self.settled = true;
+                ok
+            }
             Err(_) => {
                 self.notes.push(
                     "the audio devices did not respond in time, so the recording has no sound",
@@ -139,9 +148,21 @@ impl AudioEngine {
 
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
+        let Some(h) = self.handle.take() else {
+            return;
+        };
+        // Stopped before `wait_ready` (the video failed to start): give setup a moment, then
+        // detach rather than block on a device stuck in activation.
+        if !self.settled
+            && matches!(
+                self.ready.recv_timeout(SHUTDOWN_GRACE),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            )
+        {
+            tracing::warn!("audio device setup still pending at stop; detaching its thread");
+            return;
         }
+        let _ = h.join();
     }
 }
 

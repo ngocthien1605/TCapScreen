@@ -90,6 +90,10 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
       sound, the file is fine, and the dialog says the microphone stopped.
 - [ ] A 24-bit / 5.1 device records audible sound (decode and downmix are unit-tested; this
       machine's devices are all 32-bit float stereo).
+- [ ] Record with a Bluetooth headset microphone and listen for dropouts. The mixer drops a
+      source's audio that arrives more than ~50 ms late (to keep it in sync), so a device that
+      delivers in long bursts would sound chopped rather than delayed; the knob is
+      `STARVE_LIMIT` in `recorder/src/audio.rs`.
 
 ## M5 — GIF
 - [ ] Short region recording exports an optimised GIF that opens in a browser.

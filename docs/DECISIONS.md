@@ -215,10 +215,11 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 - **Graceful degradation, reported.** Each source is opened independently: a missing or busy
   microphone no longer discards a working system-audio capture. Device setup overlaps the wait
   for the first video frame and may take up to 10 s (a Bluetooth headset switching profile);
-  past that the audio thread is detached, so stopping can't hang on a stuck device, and the
-  recording is video-only. Every such case leaves a note on the recording, and the app shows
-  them in one dialog after the file is saved ("…saved, but some of its sound is missing"), not
-  mid-recording, where a dialog would land in the video.
+  past that the audio thread is detached and the recording is video-only. A recording that
+  stops before setup reported in (the video failed to start) waits 2 s, then detaches too, so
+  stopping can't hang on a device stuck in activation. Every such case leaves a note on the
+  recording, and the app shows them in one dialog after the file is saved ("…saved, but its
+  sound was not recorded as set up"), not mid-recording, where a dialog would land in the video.
 - **AAC muxed via the same `IMFSinkWriter`** (`AddStream` before `BeginWriting`), 48 kHz stereo,
   192 kbps (`AVG_BYTES_PER_SECOND = 24000`; the encoder only accepts 12k/16k/20k/24k).
 - **Verification by signal, not ears** (`dev record-audio-test` + extended `probe-mp4`): decode
