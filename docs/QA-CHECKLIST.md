@@ -66,8 +66,9 @@ there are copied into this file.
       125 %. *(Same session.)*
 - [x] Four Monitor screenshots in a row into the OneDrive-synced `Pictures\RustShot` → four
       files, no temp files left, no errors.
-- [ ] Editor dragged to a monitor with a different scale re-lays out (`WM_DPICHANGED`); needs a
-      second monitor.
+- [x] Editor dragged to a monitor with a different scale re-lays out (`WM_DPICHANGED`); the
+      flyout and the recording toolbar open on the monitor under the pointer. *(Hardware checks
+      page, two monitors at different scales, 2026-10-23: pass.)*
 - [ ] Protected/DRM window → near-black detected and a warning surfaced (not a silent black PNG).
 
 ## M3 — Recording (MP4, video-only)
@@ -101,12 +102,18 @@ there are copied into this file.
       one-time dialog + `logs\panic.log` has not been provoked live.
 
 ## M4 — Audio
-- [ ] Mic-only, system-only, and mic+system each mux correctly. *(System-only verified by
+- [x] Mic-only, system-only, and mic+system each mux correctly. *(2026-10-23, by ear on the
+      hardware checks page: mic-only and mic+system recordings play, system audio clear and steady
+      throughout, mic audible but quiet: it was the Windows default input (the laptop's), not
+      the earphone mic the tester spoke into, which is what the Settings microphone picker is for.
+      Earlier: system-only verified by
       signal: `dev record-audio-test 0 10` → `probe-mp4` audio 9.11 s vs video 9.07 s, 1 kHz
       tone found, no clock corrections logged. Mic and mic+system verified in memory only with
       `dev audio-probe --mic` / `--system --mic`: both sources open, full-rate frames, non-zero
       level; nothing written to disk. A mic recording to MP4 still needs a human listen.)*
-- [ ] A/V stays in sync (±1 frame drift over 3 min).
+- [ ] A/V stays in sync (±1 frame drift over 3 min). *(2026-10-23: a 102 s mic+system recording
+      stayed in sync to the end by ear; log: audio 101.9 s vs 3058 frames at 30 fps = 101.9 s,
+      no clock corrections. The full 3 minutes is still to do.)*
 - [x] `microphone_device` that matches nothing → default microphone used plus the note "the
       microphone "…" was not found"; a partial name selects the matching device. *(Verified
       with `dev audio-probe --mic --mic-device …`.)*
@@ -119,18 +126,28 @@ there are copied into this file.
       list and matching unit-tested; the dialog renders with the drop-down filled (`dev
       settings-selftest`: 2 entries here). Not yet driven by hand.)*
 - [ ] Unplugging a USB/Bluetooth microphone mid-recording → the rest of the take has no mic
-      sound, the file is fine, and the dialog says the microphone stopped.
+      sound, the file is fine, and the dialog says the microphone stopped. *(2026-10-23: the
+      device that dropped was the AirPods' output, so it was **system audio** that stopped
+      (`0x88890004`): file saved and playable, the dialog named system audio, the microphone (the
+      built-in array, still the Windows default) kept recording. Device loss mid-recording
+      therefore works; the microphone case needs the picker set to the headset's mic.)*
 - [ ] A 24-bit / 5.1 device records audible sound (decode and downmix are unit-tested; this
       machine's devices are all 32-bit float stereo).
 - [ ] Record with a Bluetooth headset microphone and listen for dropouts. The mixer drops a
       source's audio that arrives more than ~50 ms late (to keep it in sync), so a device that
       delivers in long bursts would sound chopped rather than delayed; the knob is
-      `STARVE_LIMIT` in `recorder/src/audio.rs`.
+      `STARVE_LIMIT` in `recorder/src/audio.rs`. *(2026-10-23: not yet tested; the take recorded
+      with AirPods connected used the built-in microphone array, the Windows default input, not
+      `Headset (AirPods Max 2)`. Retest with the picker, and check that opening the headset's
+      mic (which switches a Bluetooth headset to its hands-free profile) doesn't kill a
+      system-audio loopback on its `Headphones` endpoint.)*
 
 ## M5 — GIF
 - [ ] Short region recording exports an optimised GIF that opens in a browser.
-- [ ] Dimension/length caps enforced with a clear warning. *(Length cap now ends the recording
-      with the notice "it reached the N-second limit for GIF recordings"; not seen live yet.)*
+- [x] Dimension/length caps enforced with a clear warning. *(Length cap: with `gif_max_seconds =
+      5` the toolbar closed at ~5 s with the notice "it reached the 5-second limit for GIF
+      recordings" and the GIF plays ~5 s; log 69 frames over 75 slots, 5.1 s wall. Hardware
+      checks page, 2026-10-23.)*
 - [x] GIF playback length matches the time recorded: `dev record-gif 0 6` → 5.73 s of playback
       from 6.0 s wall (first frame ~0.3 s in), 19 distinct frames over 86 slots.
 

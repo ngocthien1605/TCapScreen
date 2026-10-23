@@ -193,6 +193,15 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Hardware checks, first pass (tester on the 0.1.6 tray build, results on the
+  checks page, read back with the log). Pass: Settings taskbar button, two monitors at
+  different scales, GIF length cap with notice, mic+system recording by ear, 102 s A/V sync by
+  ear. Found: every recording used the Windows default microphone (Realtek, later the built-in
+  Intel array once AirPods connected), never the earphone/AirPods mic the tester meant; that is
+  what the (unreleased) Settings microphone picker fixes. So the Bluetooth-mic and mic-unplug
+  checks did not test the microphone: the unplug dropped the AirPods' output and the
+  system-audio lane stopped (`0x88890004`), file saved, dialog correct, mic carried on. Not run
+  yet: read-back throttle, tray tooltip, run at startup, display unplug, GPU reset.
 - 2026-10-23: Microphone picker in Settings (group 3, decision 1): a drop-down of "System
   default (current default)" plus the connected microphones, built with the recorder's own
   matching rule (`recorder::find_input`), storing the device name in `microphone_device`; a
