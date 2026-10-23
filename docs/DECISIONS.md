@@ -341,3 +341,8 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   `AppState`. Re-registration drops the old manager *first* (unregistering its keys) before
   creating the new one, avoiding a self-conflict on unchanged bindings.
 - **Folder picker via `rfd`** (already a workspace dep; wants STA, which the UI thread is).
+- **User docs in two layers.** `USER-GUIDE.md` is the compact reference (every `config.toml`
+  key, every shortcut key name) and ships in the zip; `MANUAL-GUIDE.md` is the task-by-task
+  walkthrough, with a Vietnamese translation, `MANUAL-GUIDE.vi.md`, for the first users. Both
+  keep RustShot's on-screen labels in English, exactly as the app shows them, so a reader can
+  find each button. A UI change updates all three files.

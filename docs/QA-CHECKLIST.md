@@ -175,3 +175,6 @@ there are copied into this file.
       `rustshot-dev settings-selftest` (both must report OK, not a `-1` result).
 - [ ] Run-at-startup toggle adds/removes the `Run` key (opt-in).
 - [ ] Installer produces a working Start-menu app on a clean Windows 11 VM; portable zip runs.
+- [ ] Following `docs/MANUAL-GUIDE.md` (or `MANUAL-GUIDE.vi.md`) from a fresh download on a
+      clean machine matches what RustShot shows: menu and button names, defaults, file
+      locations, messages.

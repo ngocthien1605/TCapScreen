@@ -4,6 +4,24 @@ A lightweight, tray-resident Windows app that does exactly two things: **take sc
 and **record the screen**. Clean-room build inspired by Screenpresso 2.3.10.0 (capabilities,
 not code/assets). See `../RustShot-MASTER-PROMPT.md` for the authoritative spec.
 
+## Status (2026-10-23, release 0.1.7)
+
+All phases M0–M7 are done; [PROGRESS.md](PROGRESS.md) has the per-phase evidence and the
+verification log. After M7 came a review pass (items 1–7: busy gate and teardown, config
+recovery and error dialogs, capture-stream failures, audio, CI and releases, the medium
+findings, the app crate split) and the Settings microphone picker. The latest release is 0.1.7,
+published on GitHub with the earlier ones. What is still open:
+
+- **Manual hardware checks** that need a person or devices (Bluetooth microphone through the
+  picker, unplugging devices, GPU reset, run at startup, read-back throttle): tracked in
+  [QA-CHECKLIST.md](QA-CHECKLIST.md) and on the hardware checks page it links to.
+- **Not started, by choice:** code signing, a built and tested MSI, a capture history list
+  (M6), and the 4K memory / D3D thread-safety follow-ups. Each waits for a concrete need.
+
+The phase list below is the original plan, kept as written; where the build departed from it
+(raw WASAPI instead of `cpal`, Win32 dialogs instead of egui), see the resolved questions at
+the end and DECISIONS.md.
+
 ## Phase breakdown (each phase ends green: build + clippy -D warnings + fmt --check + test)
 
 - **M0 — Scaffold.** Cargo workspace, toolchain, logging, config load/save, tray icon with a
@@ -36,8 +54,9 @@ rustshot/
 │  ├─ recorder/              # MF H.264 encoder + audio capture/mix + muxing + GIF
 │  ├─ imaging/               # crop, PNG/JPEG encode, clipboard, thumbnailing, auto-naming
 │  ├─ config/                # Settings schema (serde), load/save, defaults, hotkey model
-│  └─ app/                   # BIN: tray, hotkeys, overlay, flyout, toolbar, settings, CLI
-└─ docs/                     # PLAN, DECISIONS, PROGRESS, QA-CHECKLIST, USER-GUIDE
+│  └─ app/                   # lib + bins rustshot (tray) and rustshot-dev (diagnostics)
+└─ docs/                     # PLAN, DECISIONS, PROGRESS, QA-CHECKLIST, USER-GUIDE,
+                             # MANUAL-GUIDE (en, vi), PACKAGING
 ```
 
 ## Testing strategy
@@ -45,15 +64,17 @@ rustshot/
 - **Unit-test the pure logic:** rect/DPI math, crop, auto-naming, config serde round-trip,
   hotkey parsing, GIF palette, ring-buffer back-pressure. These run in CI headlessly.
 - **GPU/display paths** (WGC grab, MF encode, overlay, tray message loop) cannot run on a
-  headless CI runner. They are exercised by a **dev CLI** (`rustshot --dev …`) runnable on a
+  headless CI runner. They are exercised by a **dev CLI** (`rustshot-dev …`) runnable on a
   real desktop, and verified against the manual **QA-CHECKLIST.md**. We do not fake green:
   anything not auto-tested is labelled as manually-verified or not-yet-done in PROGRESS.md.
 
-## Open questions (resolved pragmatically; logged in DECISIONS.md)
+## Open questions — resolved (details in DECISIONS.md)
 
-1. `windows-capture` (2.x) vs raw WGC+MF via `windows` — evaluate in M1/M3; start with the
-   higher-level crate, keep a thin wrapper so we can drop to raw if its API/maintenance gaps.
-2. Overlay tech: layered Win32 window via `windows` vs `winit`+`softbuffer`. `winit` is
-   pre-release (0.31 beta); decide in M2, leaning to a thin Win32 layered window for precision.
-3. UI toolkit for settings/flyout/toolbar: `egui`/`eframe`. Confirm it coexists with a Win32
-   overlay and the `tray-icon`/`global-hotkey` event loops.
+1. `windows-capture` (2.x) vs raw WGC+MF via `windows` → **raw** WGC and `IMFSinkWriter`
+   through the `windows` crate: control over stride, DPI and the audio mux (M1, M3).
+2. Overlay tech → a **raw Win32** window over the virtual desktop, no `winit` (M2).
+3. UI toolkit for settings/flyout/toolbar → **plain Win32** (an in-memory `DLGTEMPLATE` for
+   Settings, small tool windows for the flyout and toolbar), not egui, which wanted to own the
+   main-thread event loop (M6).
+4. Audio (planned as `cpal` for the microphone) → **raw WASAPI** for both microphone and
+   system loopback, since `cpal` cannot do loopback (M4).

@@ -10,7 +10,8 @@ pwsh -File scripts/build-portable.ps1
 ```
 
 Produces `dist/RustShot-<version>-portable-x64.zip` containing `rustshot.exe`, `USER-GUIDE.md`,
-and `LICENSE`. The build also produces `rustshot-dev.exe` (developer diagnostics); it is a
+and `LICENSE`. The step-by-step Manual Guide (`docs/MANUAL-GUIDE.md`, Vietnamese
+`docs/MANUAL-GUIDE.vi.md`) is read on GitHub and is not in the zip. The build also produces `rustshot-dev.exe` (developer diagnostics); it is a
 build artifact for development and QA and is not shipped. Unzip anywhere and run `rustshot.exe` — no installation, no admin rights. If the
 user enables "Run at startup", the registry entry points at the exe's current location, so keep
 the folder stable (or re-toggle the setting after moving it).
@@ -21,12 +22,19 @@ Releases are built and published by GitHub Actions (`.github/workflows/release.y
 
 1. Bump `version` in the workspace `Cargo.toml` (`[workspace.package]`), run `cargo update -w`
    so `Cargo.lock` follows, and commit.
-2. Create an **annotated** tag whose message is the release notes, and push it:
+2. Push the commit and wait for CI on `master` to go green. Then write the release notes to a
+   file (first line `RustShot vX.Y.Z`, a blank line, then `### Section` headings with bullet
+   lists), create an **annotated** tag from it, and push the tag:
 
    ```sh
-   git tag -a v0.1.5 -m "RustShot v0.1.5 ..."
-   git push origin master v0.1.5
+   git push origin master
+   git tag -a vX.Y.Z --cleanup=verbatim -F notes.txt
+   git push origin vX.Y.Z
    ```
+
+   `--cleanup=verbatim` keeps the `###` heading lines: with a cleanup mode that strips comments
+   (the default when git opens an editor for the message), lines starting with `#` would be
+   dropped from the notes.
 
 3. The workflow re-runs the gate (fmt, clippy, tests, cargo-deny), fails unless the tag equals
    `v<workspace version>`, builds the portable zip with `scripts/build-portable.ps1`, writes

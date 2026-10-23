@@ -2,6 +2,22 @@
 
 Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · 🔬 manual-QA only (GPU/UI)
 
+## Current status (2026-10-23, release 0.1.7)
+
+- **Shipped:** v0.1.7 on GitHub (portable zip + `.sha256`, built by the release workflow).
+  Every phase M0–M7 is done, followed by review items 1–7 and the Settings microphone picker.
+- **Gate:** fmt, clippy `-D warnings`, build and **175 tests** green with `--locked`;
+  `cargo deny check` ok; CI green on `master`, MSRV 1.90 checked.
+- **Open:** the manual hardware checks still to run (QA-CHECKLIST; Bluetooth mic through the
+  picker, device unplug, read-back throttle, tray tooltip, run at startup, display unplug, GPU
+  reset, a full 3-minute A/V sync), and the deferred items: code signing, an MSI that is
+  actually built and tested, a capture history list.
+- **Docs:** step-by-step Manual Guide in English and Vietnamese (`MANUAL-GUIDE.md`,
+  `MANUAL-GUIDE.vi.md`) next to the reference `USER-GUIDE.md`.
+
+The milestone sections below record each phase as it was finished; later changes are in the
+verification log at the end (newest first).
+
 ## M0 — Scaffold  ✅ (done & verified)
 
 | Item | Status | How verified |
@@ -177,7 +193,7 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 |---|---|---|
 | Release build (`lto=thin`, `strip`, no panic=abort) | ✅ | `cargo build --release` green |
 | Portable zip script | ✅ | `scripts/build-portable.ps1` → `dist/RustShot-<ver>-portable-x64.zip` built & listed |
-| WiX MSI source (`wix/main.wxs`): Program Files install, Start-menu shortcut, ARP entry, major-upgrade | ✅ (authored) | WiX not installed here → building the MSI is a release step (🔬) |
+| WiX MSI source (`wix/main.wxs`): Program Files install, Start-menu shortcut, ARP entry, major-upgrade (since review item 6: per-user, `%LOCALAPPDATA%Programs`) | ✅ (authored) | WiX not installed here → building the MSI is a release step (🔬) |
 | `cargo-deny` policy (`deny.toml`): advisories, license allow-list, source/version bans | ✅ | `cargo deny check` → advisories/bans/licenses/sources all **ok** |
 | MIT license + LICENSE file | ✅ | committed |
 | `docs/PACKAGING.md` | ✅ | portable + MSI + cargo-deny instructions |
@@ -193,6 +209,14 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Documentation pass for 0.1.7. New `MANUAL-GUIDE.md` and `MANUAL-GUIDE.vi.md`
+  (install, first start, each task step by step, Settings field by field, shortcuts,
+  `config.toml`-only options, file locations, troubleshooting, update, uninstall), checked
+  against the code's labels and defaults. README: download/install section, latest release,
+  microphone picker, `--locked` gate, current layout, doc links. USER-GUIDE: tray menu items,
+  flyout timing, the countdown and delay show nothing on screen, a black (DRM) capture is noted
+  in the log rather than a dialog. PLAN: status and resolved questions. PACKAGING: tagging with
+  `--cleanup=verbatim -F`. No code changes.
 - 2026-10-23: **Release 0.1.7** (tag `v0.1.7`): the Settings microphone picker. Verified by
   hand first on the master build: choosing a microphone other than the Windows default made the
   next recording use it (log names the chosen device). Still open from the checks page: a

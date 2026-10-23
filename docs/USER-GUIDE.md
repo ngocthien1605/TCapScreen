@@ -4,11 +4,17 @@ RustShot is a lightweight Windows screenshot and screen-recording tool that live
 tray. It captures regions, windows, monitors, or the whole desktop, and records video (MP4) or
 animated GIFs with optional audio.
 
+This is the compact reference. For a step-by-step walkthrough (installing, each task, updating,
+uninstalling) see the Manual Guide, in [English](MANUAL-GUIDE.md) or
+[Vietnamese](MANUAL-GUIDE.vi.md). This guide describes RustShot 0.1.7.
+
 ## Getting started
 
 Run `rustshot.exe`. A tray icon (a teal rounded square) appears near the clock — RustShot has no
 main window; everything is driven from the tray menu and global hotkeys. Right-click (or
-left-click) the tray icon for the menu. Choose **Quit RustShot** to exit.
+left-click) the tray icon for the menu: the **Screenshot** and **Record** submenus, **Open output
+folder**, **Settings…**, and **Quit RustShot** to exit (a recording in progress is stopped and
+saved first).
 
 On first run, RustShot writes its configuration to `%APPDATA%\RustShot\config.toml` and creates
 the output folder (by default `Pictures\RustShot`). Logs are written to `%APPDATA%\RustShot\logs`.
@@ -17,7 +23,7 @@ Only one instance runs at a time; launching a second exits immediately.
 
 ## Taking screenshots
 
-From the tray **Screenshot** submenu:
+From the tray **Screenshot** submenu (its items read "Screenshot — Region" and so on):
 
 | Item | What it does |
 |---|---|
@@ -40,7 +46,11 @@ Each screenshot is saved to the output folder with an automatic name
 - **Path** — copy the file's full path.
 - **Delete** — delete the file (and dismiss the flyout).
 
-The flyout auto-dismisses after a few seconds.
+The flyout closes by itself about 8 seconds after it appears, but stays open while the pointer
+is over it.
+
+With `delay_seconds` set in `config.toml`, a screenshot waits that long before capturing; nothing
+is shown during the wait.
 
 ### Annotating a screenshot
 
@@ -63,10 +73,11 @@ save first. Annotations are drawn at the screenshot's full resolution, whatever 
 
 From the tray **Record** submenu:
 
-- **Record video (region/window)** — pick a region or window (the same crosshair overlay as Region screenshots),
-  then recording starts (after the optional countdown) and a compact always-on-top toolbar
-  appears with the elapsed time, **Pause/Resume**, and **Stop**. Output is an MP4 (H.264),
-  optionally with microphone and/or system audio. **Stop** finalizes a playable file.
+- **Record video (region/window)** — pick a region or window (the same crosshair overlay as
+  Region screenshots). After the countdown (3 s by default; nothing is shown during it) recording
+  starts and a compact always-on-top toolbar appears with the elapsed time, **Pause/Resume**, and
+  **Stop**. Output is an MP4 (H.264 + AAC), optionally with microphone and/or system audio.
+  **Stop** (or `Ctrl+Shift+S`) finalizes a playable file.
 - **Record GIF (region/window)** — same selection, but produces an optimized, looping animated
   GIF (bounded by the configured max width, frame rate, and duration).
 
@@ -182,8 +193,8 @@ from a newer build still loads in an older one.
   default.
 - **Something failed:** RustShot shows a dialog for any screenshot, recording, clipboard, delete
   or settings operation that did not complete, with the reason; the log has the details.
-- **A capture is all black:** the target is DRM-protected (e.g. some video players); RustShot
-  warns and still saves what it captured.
+- **A capture is all black:** the target is DRM-protected (e.g. some video players), which
+  Windows blanks out of captures. RustShot still saves what it captured and notes it in the log.
 - **Sound missing from a recording:** if a microphone or system audio could not be recorded
   (no microphone connected, the one named in `microphone_device` not found, a device unplugged
   mid-way, an unsupported device format), RustShot still saves the video, with whatever sound
