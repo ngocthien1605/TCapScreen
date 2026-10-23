@@ -193,6 +193,11 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: **Release 0.1.4** (tag `v0.1.4`): Annotate editor (red rectangle / text, crosshair
+  cursor, Shift/Alt+Enter new line), review items (1)–(3) (record-flow busy gate, Quit
+  teardown, panic containment; config recovery + user-visible error dialogs; recordings end
+  cleanly when the source window closes or the GPU device is lost). Portable zip
+  `dist/RustShot-0.1.4-portable-x64.zip` built from the tagged commit.
 - 2026-10-23: Review item (3) — capture-stream failure handling. `StreamEvent::Error` +
   bounded failure counter in the WGC callback, `check_health` poll (device removed-reason +
   `IsWindow`; WGC's `Closed` event did not fire for a killed window), frame pool `Recreate` on
