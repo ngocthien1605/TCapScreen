@@ -77,6 +77,11 @@ on its own: the toolbar disappears, everything captured up to that point is save
 file, and a notice tells you where it is. Resizing the recorded window mid-recording is fine;
 the video keeps its starting size (a larger window is cropped, a smaller one is padded).
 
+With microphone and/or system audio turned on, each source is recorded independently: if one
+cannot be used, the other still is, and a notice after the recording says what is missing.
+Sound stays in step with the picture; if every audio device stalls, the gap is filled with
+silence rather than letting the sound slide out of sync.
+
 ## Default hotkeys
 
 | Action | Default |
@@ -131,7 +136,8 @@ include_cursor = true
 countdown_seconds = 3
 capture_microphone = false
 capture_system_audio = false
-microphone_device = ""       # empty = system default
+microphone_device = ""       # empty = system default; else a name (or part of one)
+                             # from `rustshot dev list-audio-inputs`
 gif_max_width = 800          # longer edge; frames are scaled to fit
 gif_max_seconds = 30
 gif_fps = 15
@@ -166,6 +172,10 @@ from a newer build still loads in an older one.
   or settings operation that did not complete, with the reason; the log has the details.
 - **A capture is all black:** the target is DRM-protected (e.g. some video players); RustShot
   warns and still saves what it captured.
-- **No audio in a recording:** check the microphone/system-audio toggles; if the chosen device
-  is missing, RustShot records video-only and notes it in the log.
+- **Sound missing from a recording:** if a microphone or system audio could not be recorded
+  (no microphone connected, the one named in `microphone_device` not found, a device unplugged
+  mid-way, an unsupported device format), RustShot still saves the video, with whatever sound
+  it could get, and then shows a dialog listing what is missing and why. A microphone named in
+  `microphone_device` that is not connected falls back to the default microphone. Otherwise,
+  check the microphone and system-audio toggles in Settings.
 - **Logs:** `%APPDATA%\RustShot\logs\rustshot.log.<date>` has details for any failure.

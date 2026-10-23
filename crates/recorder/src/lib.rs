@@ -3,10 +3,11 @@
 //! M3 implements MP4 (H.264) video-only recording: a continuous WGC capture stream
 //! ([`capture_core::CaptureStream`]) feeds a Media Foundation `IMFSinkWriter` on a dedicated
 //! encoder thread. The encoder re-emits the latest frame at a constant rate (CFR), so a static
-//! screen still produces a smooth, seekable file; pause simply stops the clock. Audio (M4) and
-//! GIF (M5) are not yet implemented and return [`RecorderError::NotImplemented`].
+//! screen still produces a smooth, seekable file; pause simply stops the clock. Optional system
+//! and microphone audio (WASAPI) is muxed as AAC; GIF output has its own session.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use capture_core::CaptureTarget;
 use thiserror::Error;
@@ -21,6 +22,40 @@ mod mf;
 mod pipeline;
 #[cfg(windows)]
 pub mod probe;
+
+#[cfg(windows)]
+pub use audio::{list_inputs, probe_capture, AudioInput, AudioProbe, AudioRequest};
+
+/// Things the user should know about a recording that still produced a file — chiefly audio
+/// that could not be recorded (a missing microphone, a device that stopped). Shared between the
+/// recording threads and the handle; each distinct note is kept once, in order.
+#[derive(Debug, Clone, Default)]
+pub struct Notes(Arc<Mutex<Vec<String>>>);
+
+impl Notes {
+    /// Record a note (and log it). Duplicates are ignored.
+    pub fn push(&self, note: impl Into<String>) {
+        let note = note.into();
+        let mut v = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !v.contains(&note) {
+            tracing::warn!("recording note: {note}");
+            v.push(note);
+        }
+    }
+
+    /// Take the notes gathered so far.
+    pub fn take(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+}
 
 /// Audio capture configuration for a recording.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -125,6 +160,7 @@ pub struct RecorderHandle {
     #[cfg(windows)]
     inner: Option<Backend>,
     out_path: PathBuf,
+    notes: Notes,
 }
 
 impl RecorderHandle {
@@ -169,12 +205,19 @@ impl RecorderHandle {
     }
 
     /// Stop and finalize; returns the written file's path.
-    pub fn stop(mut self) -> Result<PathBuf> {
+    pub fn stop(self) -> Result<PathBuf> {
+        self.finish().0
+    }
+
+    /// Stop and finalize, also returning the recording's [`Notes`] (for example "the
+    /// microphone could not be recorded"), so the caller can tell the user what the file lacks.
+    pub fn finish(mut self) -> (Result<PathBuf>, Vec<String>) {
         #[cfg(windows)]
         if let Some(s) = self.inner.take() {
-            return s.stop();
+            let result = s.stop();
+            return (result, self.notes.take());
         }
-        Ok(self.out_path.clone())
+        (Ok(self.out_path.clone()), self.notes.take())
     }
 }
 
@@ -202,13 +245,17 @@ impl Recorder {
         #[cfg(windows)]
         {
             let out_path = cfg.out_path.clone();
+            let notes = Notes::default();
             let backend = match cfg.output {
-                RecordOutput::Mp4 { .. } => Backend::Video(pipeline::Session::start(cfg)?),
+                RecordOutput::Mp4 { .. } => {
+                    Backend::Video(pipeline::Session::start(cfg, notes.clone())?)
+                }
                 RecordOutput::Gif { .. } => Backend::Gif(gif::GifSession::start(cfg)?),
             };
             Ok(RecorderHandle {
                 inner: Some(backend),
                 out_path,
+                notes,
             })
         }
         #[cfg(not(windows))]

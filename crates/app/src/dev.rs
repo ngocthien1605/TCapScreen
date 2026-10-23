@@ -94,6 +94,23 @@ pub enum DevCmd {
         resume_at: u64,
         out: PathBuf,
     },
+    /// List the active audio inputs (names usable as `microphone_device`).
+    ListAudioInputs,
+    /// Run audio capture in memory for N seconds and report levels and any problems. Nothing
+    /// is written to disk.
+    AudioProbe {
+        /// Seconds to capture.
+        seconds: f32,
+        /// Capture system audio (loopback).
+        #[arg(long)]
+        system: bool,
+        /// Capture the microphone.
+        #[arg(long)]
+        mic: bool,
+        /// Microphone to use (endpoint id or name, as in `microphone_device`).
+        #[arg(long)]
+        mic_device: Option<String>,
+    },
     /// Render the Settings dialog with defaults and auto-close it (smoke-tests the template).
     SettingsSelftest,
     /// Record the first window whose title contains `query` for up to N seconds. Reports an
@@ -159,6 +176,58 @@ pub fn run(cmd: DevCmd) -> ExitCode {
             out,
         } => cmd_record_pause_test(index, seconds, pause_at, resume_at, out),
         DevCmd::SettingsSelftest => cmd_settings_selftest(),
+        DevCmd::ListAudioInputs => cmd_list_audio_inputs(),
+        DevCmd::AudioProbe {
+            seconds,
+            system,
+            mic,
+            mic_device,
+        } => cmd_audio_probe(seconds, system, mic, mic_device),
+    }
+}
+
+fn cmd_list_audio_inputs() -> ExitCode {
+    match recorder::list_inputs() {
+        Ok(inputs) => {
+            for i in &inputs {
+                let mark = if i.is_default { "*" } else { " " };
+                println!("{mark} {}  [{}]", i.name, i.id);
+            }
+            println!("{} input(s); * = default", inputs.len());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_audio_probe(seconds: f32, system: bool, mic: bool, mic_device: Option<String>) -> ExitCode {
+    let report = recorder::probe_capture(
+        recorder::AudioRequest {
+            system,
+            mic,
+            mic_device,
+            tone_hz: None,
+        },
+        seconds,
+    );
+    println!(
+        "capturing={}  frames={}  ({:.2}s at 48 kHz)  rms={:.4}  peak={:.4}",
+        report.capturing,
+        report.frames,
+        report.frames as f64 / 48_000.0,
+        report.rms,
+        report.peak
+    );
+    for n in &report.notes {
+        println!("note: {n}");
+    }
+    if report.capturing {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -454,7 +523,11 @@ fn cmd_record_audio_test(index: usize, seconds: u64, out: PathBuf) -> ExitCode {
         out.display()
     );
     std::thread::sleep(std::time::Duration::from_secs(seconds));
-    match handle.stop() {
+    let (result, notes) = handle.finish();
+    for n in &notes {
+        println!("note: {n}");
+    }
+    match result {
         Ok(p) => {
             println!("saved {}", p.display());
             ExitCode::SUCCESS

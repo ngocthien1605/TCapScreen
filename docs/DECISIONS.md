@@ -186,14 +186,41 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 - **Canonical internal format 48 kHz stereo f32**, linear-resampled per source (mic may be
   44.1 kHz), mixed by summing with a soft clamp, then converted to **PCM16** for the sink — MF's
   AAC encoder rejects float input on some systems.
-- **Sample-count audio clock.** Audio sample time is `frames_written * 10^7 / 48000`, never wall
-  time, so it cannot drift against the video's index clock. Pre-roll captured during video
+- **Sample-count audio clock, held to the video clock.** Audio sample time is
+  `frames_written * 10^7 / 48000`, never wall time, so packets can't jitter the timeline. But
+  the video is paced by the monotonic clock and the audio by the device's own crystal, and a
+  stalled or unplugged device simply stops delivering, so the two *can* drift apart. The encoder
+  loop therefore compares the samples written with the samples the active (unpaused) time calls
+  for: more than 200 ms behind → silence is written to close the gap (leaving 50 ms so audio
+  still in flight lands on time, not early); more than 200 ms ahead (a fast device clock) → the
+  excess is trimmed from the next chunk. 200 ms sits above capture latency and scheduling jitter
+  and below an obvious lip-sync slip; corrections are logged. Pre-roll captured during video
   startup is discarded at the loop start so both timelines begin at t = 0 (measured skew fell
   from ~0.43 s to ~0.04 s). Pause drops audio packets, matching the paused video.
+- **Per-source alignment in the mixer.** When one source starves past the wait limit, the mixer
+  emits with silence in its place and records the span as *owed*; that source's late audio for
+  the span is dropped when it arrives, so a microphone hiccup doesn't leave the mic permanently
+  behind the system audio. A source more than 500 ms ahead of the mixer has its oldest audio
+  dropped. A source whose device errors (unplugged) becomes silence for the rest of the take.
+- **Any shared-mode format.** The mix format is decoded from `nBlockAlign` and the sample
+  container: PCM 8/16/24/32-bit (24-in-32 is MSB-aligned, so it reads as 32-bit) and float
+  32/64; anything else is refused with a note instead of silently recording zeros. More than two
+  channels are folded to stereo by `dwChannelMask` (centre and surrounds at -3 dB, LFE dropped;
+  dropping the centre would lose the dialogue of a 5.1 mix). The resampler interpolates across
+  buffer boundaries. `GetMixFormat` memory is freed (`CoTaskMemFree` guard).
+- **Microphone choice.** `microphone_device` is matched against the active capture endpoints:
+  the endpoint id, else the friendly name (case-insensitive), else the first name containing it.
+  No match → the default microphone, with a note. `dev list-audio-inputs` prints the names; there
+  is no picker in Settings yet.
+- **Graceful degradation, reported.** Each source is opened independently: a missing or busy
+  microphone no longer discards a working system-audio capture. Device setup overlaps the wait
+  for the first video frame and may take up to 10 s (a Bluetooth headset switching profile);
+  past that the audio thread is detached, so stopping can't hang on a stuck device, and the
+  recording is video-only. Every such case leaves a note on the recording, and the app shows
+  them in one dialog after the file is saved ("…saved, but some of its sound is missing"), not
+  mid-recording, where a dialog would land in the video.
 - **AAC muxed via the same `IMFSinkWriter`** (`AddStream` before `BeginWriting`), 48 kHz stereo,
   192 kbps (`AVG_BYTES_PER_SECOND = 24000`; the encoder only accepts 12k/16k/20k/24k).
-- **Graceful degradation.** If the endpoint/device is missing, audio setup logs and the
-  recording proceeds video-only rather than failing.
 - **Verification by signal, not ears** (`dev record-audio-test` + extended `probe-mp4`): decode
   the audio stream and assert RMS > 0.1 (present, not silence) and a zero-crossing dominant
   frequency near the rendered tone. Lip-sync by ear and live mic input remain manual QA.

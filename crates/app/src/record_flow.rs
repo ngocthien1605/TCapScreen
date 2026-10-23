@@ -173,14 +173,28 @@ pub fn stop() {
     // Destroy the toolbar first (drops its window), then finalize the file.
     let Recording { handle, toolbar } = rec;
     drop(toolbar);
-    match handle.stop() {
-        Ok(path) => tracing::info!("recording saved to {}", path.display()),
+    let (result, notes) = handle.finish();
+    let sound = sound_notes(&notes);
+    match result {
+        Ok(path) if notes.is_empty() => tracing::info!("recording saved to {}", path.display()),
+        // Saved, but without the sound the user asked for (a missing or busy microphone, a
+        // device that stopped mid-way): say so now rather than let them find a silent file.
+        Ok(path) => crate::notify::warn(
+            "The recording was saved, but some of its sound is missing.",
+            format!("{sound}\n\nThe file is saved at:\n{}", path.display()),
+        ),
         // The file exists and is playable; the user only needs to know it is shorter than
         // they expected and why (a closed window is informational, not a failure).
         Err(recorder::RecorderError::EndedEarly { path, reason }) => crate::notify::warn(
             "The recording ended early.",
             format!(
-                "{reason}.\n\nWhat was captured up to that point is saved at:\n{}",
+                "{}.{}\n\nWhat was captured up to that point is saved at:\n{}",
+                capitalize(&reason),
+                if sound.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n{sound}")
+                },
                 path.display()
             ),
         ),
@@ -236,5 +250,41 @@ fn select_target() -> Result<Option<CaptureTarget>> {
                 None => Ok(None),
             }
         }
+    }
+}
+
+/// The recorder's notes as a bulleted list, one sentence each (empty when there are none).
+fn sound_notes(notes: &[String]) -> String {
+    notes
+        .iter()
+        .map(|n| format!("• {}.", capitalize(n)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notes_become_capitalized_bullets() {
+        assert_eq!(sound_notes(&[]), "");
+        let notes = vec![
+            "the microphone could not be recorded (busy)".to_string(),
+            "system audio could not be recorded".to_string(),
+        ];
+        assert_eq!(
+            sound_notes(&notes),
+            "• The microphone could not be recorded (busy).\n• System audio could not be recorded."
+        );
+        assert_eq!(capitalize("éclair"), "Éclair");
     }
 }

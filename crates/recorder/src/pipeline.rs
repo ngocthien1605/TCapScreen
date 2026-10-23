@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use capture_core::{CaptureStream, Frame, StreamEvent};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
+use crate::audio::{AudioEngine, AudioRequest};
 use crate::mf::VideoSink;
-use crate::{RecordCfg, RecordOutput, RecorderError, Result};
+use crate::{Notes, RecordCfg, RecordOutput, RecorderError, Result};
 
 /// Controls and the join handle for a running encoder thread.
 #[derive(Debug)]
@@ -22,14 +23,14 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn start(cfg: RecordCfg) -> Result<Session> {
+    pub fn start(cfg: RecordCfg, notes: Notes) -> Result<Session> {
         let paused = Arc::new(AtomicBool::new(false));
         let stopping = Arc::new(AtomicBool::new(false));
         let p = paused.clone();
         let s = stopping.clone();
         let thread = std::thread::Builder::new()
             .name("rustshot-encoder".into())
-            .spawn(move || encode_loop(cfg, p, s))
+            .spawn(move || encode_loop(cfg, p, s, notes))
             .map_err(|e| RecorderError::Platform(format!("spawning encoder thread: {e}")))?;
         Ok(Session {
             paused,
@@ -70,6 +71,7 @@ fn encode_loop(
     cfg: RecordCfg,
     paused: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
+    notes: Notes,
 ) -> Result<std::path::PathBuf> {
     // MTA for this thread: satisfies both Media Foundation and WinRT (WGC).
     // SAFETY: initialises COM for the encoder thread; result is tolerated.
@@ -87,19 +89,24 @@ fn encode_loop(
         RecordOutput::Gif { .. } => return Err(RecorderError::NotImplemented),
     };
 
-    // Optional audio capture. A dev/test env var injects a sine tone into the render keep-alive
-    // so loopback has a known signal to prove the path end-to-end.
+    // Optional audio capture, started before the video so device setup overlaps the wait for
+    // the first frame. A dev/test env var injects a sine tone into the render keep-alive so
+    // loopback has a known signal to prove the path end-to-end.
     let want_audio = audio_cfg.microphone || audio_cfg.system_audio;
-    let tone_hz = std::env::var("RUSTSHOT_TEST_TONE_HZ")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok());
-    let (audio_engine, audio_rx, audio_available) = if want_audio {
-        let (eng, rx, avail) =
-            crate::audio::AudioEngine::start(audio_cfg.system_audio, audio_cfg.microphone, tone_hz);
-        (Some(eng), Some(rx), avail)
-    } else {
-        (None, None, false)
-    };
+    let audio_started = Instant::now();
+    let mut audio = want_audio.then(|| {
+        AudioEngine::start(
+            AudioRequest {
+                system: audio_cfg.system_audio,
+                mic: audio_cfg.microphone,
+                mic_device: audio_cfg.microphone_device.clone(),
+                tone_hz: std::env::var("RUSTSHOT_TEST_TONE_HZ")
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok()),
+            },
+            notes.clone(),
+        )
+    });
 
     let (tx, rx) = mpsc::channel::<StreamEvent>();
     let stream = CaptureStream::start(&cfg.target, cursor, tx).map_err(cap_err)?;
@@ -118,8 +125,20 @@ fn encode_loop(
         return Err(RecorderError::Platform("captured frame is empty".into()));
     }
 
+    // The sink's track layout is fixed at creation, so settle whether there is audio now. A
+    // source that failed has already left a note saying why.
+    if let Some((engine, _)) = audio.as_mut() {
+        if !engine.wait_ready(audio_started + crate::audio::READY_TIMEOUT) {
+            audio = None;
+        }
+    }
+    let (audio_engine, audio_rx) = match audio {
+        Some((engine, rx)) => (Some(engine), Some(rx)),
+        None => (None, None),
+    };
+
     let path_str = cfg.out_path.to_string_lossy().to_string();
-    let sink = match VideoSink::new(&path_str, w, h, fps, bitrate, audio_available) {
+    let sink = match VideoSink::new(&path_str, w, h, fps, bitrate, audio_rx.is_some()) {
         Ok(s) => s,
         Err(e) => {
             stream.stop();
@@ -218,17 +237,49 @@ fn encode_loop(
                 }
             }
 
-            // Audio: write while recording, discard while paused (keeps A and V aligned).
+            // Audio: write while recording, discard while paused (keeps A and V aligned). The
+            // track is timed by its own sample count, held to the video clock: a gap (every
+            // device stalled, or one was unplugged) is filled with silence, and a device clock
+            // running fast has its excess trimmed, so the two never drift apart audibly.
             if let Some(arx) = &audio_rx {
+                let expected = if is_paused {
+                    i64::MAX
+                } else {
+                    expected_audio_frames(
+                        now.saturating_duration_since(start)
+                            .saturating_sub(paused_accum),
+                    )
+                };
                 while let Ok(chunk) = arx.try_recv() {
                     if is_paused {
                         continue;
                     }
-                    let ts = audio_frames * 10_000_000 / crate::mf::AUDIO_RATE as i64;
-                    if let Err(e) = sink.write_audio(&chunk, ts) {
-                        tracing::warn!("audio write failed: {e}");
+                    let frames = (chunk.len() / AUDIO_CHANNELS) as i64;
+                    let skip = audio_overrun(expected, audio_frames, frames);
+                    if skip > 0 {
+                        tracing::info!("audio ahead of video; trimmed {} ms", skip * 1000 / RATE);
                     }
-                    audio_frames += (chunk.len() / crate::mf::AUDIO_CHANNELS as usize) as i64;
+                    let keep = &chunk[skip as usize * AUDIO_CHANNELS..];
+                    write_audio(&sink, keep, &mut audio_frames);
+                }
+                if !is_paused {
+                    let gap = audio_catch_up(expected, audio_frames);
+                    if gap > 0 {
+                        tracing::info!(
+                            "audio behind video; filled {} ms of silence",
+                            gap * 1000 / RATE
+                        );
+                        let mut left = gap;
+                        while left > 0 {
+                            let n = left.min(RATE);
+                            write_audio(
+                                &sink,
+                                &vec![0i16; n as usize * AUDIO_CHANNELS],
+                                &mut audio_frames,
+                            );
+                            left -= n;
+                        }
+                    }
                 }
             }
 
@@ -275,6 +326,53 @@ const HEALTH_CHECK_EVERY: Duration = Duration::from_secs(1);
 /// Reason text for a source that disappeared mid-recording.
 pub(crate) const SOURCE_CLOSED: &str = "the captured window or display was closed";
 
+/// Audio sample rate as the clock arithmetic below uses it.
+const RATE: i64 = crate::mf::AUDIO_RATE as i64;
+const AUDIO_CHANNELS: usize = crate::mf::AUDIO_CHANNELS as usize;
+/// How far the audio track may drift from the video clock before it is corrected (200 ms):
+/// beyond normal capture latency and scheduling jitter, well short of an audible lip-sync slip.
+const AUDIO_SLACK: i64 = RATE / 5;
+/// Lag left after filling a gap (50 ms), so audio still in flight lands on time, not early.
+const AUDIO_MARGIN: i64 = RATE / 20;
+
+/// Audio frames that belong in the track after `active` (unpaused) recording time.
+fn expected_audio_frames(active: Duration) -> i64 {
+    (active.as_nanos() * RATE as u128 / 1_000_000_000) as i64
+}
+
+/// Frames of silence to insert when the track has fallen more than [`AUDIO_SLACK`] behind.
+fn audio_catch_up(expected: i64, written: i64) -> i64 {
+    let lag = expected - written;
+    if lag > AUDIO_SLACK {
+        lag - AUDIO_MARGIN
+    } else {
+        0
+    }
+}
+
+/// Frames to drop from the front of a `chunk`-frame chunk that would put the track more than
+/// [`AUDIO_SLACK`] ahead of the video clock (a device clock running fast).
+fn audio_overrun(expected: i64, written: i64, chunk: i64) -> i64 {
+    let lead = written.saturating_add(chunk).saturating_sub(expected);
+    if lead > AUDIO_SLACK {
+        lead.min(chunk)
+    } else {
+        0
+    }
+}
+
+/// Write PCM at the track's running sample position and advance it (also on a failed write,
+/// so one bad sample can't shift everything after it).
+fn write_audio(sink: &VideoSink, pcm: &[i16], written: &mut i64) {
+    if pcm.is_empty() {
+        return;
+    }
+    if let Err(e) = sink.write_audio(pcm, *written * 10_000_000 / RATE) {
+        tracing::warn!("audio write failed: {e}");
+    }
+    *written += (pcm.len() / AUDIO_CHANNELS) as i64;
+}
+
 /// Block up to 3s for the first frame; map a close/timeout to an error.
 fn wait_first(rx: &mpsc::Receiver<StreamEvent>) -> Result<Frame> {
     match rx.recv_timeout(Duration::from_secs(3)) {
@@ -286,5 +384,43 @@ fn wait_first(rx: &mpsc::Receiver<StreamEvent>) -> Result<Frame> {
         Err(_) => Err(RecorderError::Capture(
             "no frame arrived within 3s of starting capture".into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expected_frames_follow_active_time() {
+        assert_eq!(expected_audio_frames(Duration::ZERO), 0);
+        assert_eq!(expected_audio_frames(Duration::from_millis(1500)), 72_000);
+    }
+
+    #[test]
+    fn small_lag_is_left_alone_and_a_gap_is_filled_to_the_margin() {
+        assert_eq!(audio_catch_up(48_000, 48_000), 0);
+        assert_eq!(
+            audio_catch_up(48_000, 48_000 - AUDIO_SLACK),
+            0,
+            "at the limit"
+        );
+        // Every device stalled for a second: fill all but the margin.
+        assert_eq!(audio_catch_up(96_000, 48_000), 48_000 - AUDIO_MARGIN);
+        // Ahead of the clock is never "behind".
+        assert_eq!(audio_catch_up(0, 4_800), 0);
+    }
+
+    #[test]
+    fn audio_running_ahead_is_trimmed_back_to_the_clock() {
+        // Normal: a 10 ms chunk with the track exactly on time.
+        assert_eq!(audio_overrun(48_000, 47_520, 480), 0);
+        // Track already 250 ms ahead: trim the whole lead, capped at the chunk.
+        assert_eq!(audio_overrun(48_000, 48_000 + 12_000 - 480, 480), 480);
+        assert_eq!(audio_overrun(48_000, 48_000, 12_000), 12_000);
+        // 220 ms ahead after a 10 ms chunk: trim the excess over the clock.
+        assert_eq!(audio_overrun(48_000, 48_000 + 10_080, 480), 480);
+        // Paused (expected = MAX) never trims.
+        assert_eq!(audio_overrun(i64::MAX, 10, 480), 0);
     }
 }

@@ -74,9 +74,22 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
       one-time dialog + `logs\panic.log` has not been provoked live.
 
 ## M4 — Audio
-- [ ] Mic-only, system-only, and mic+system each mux correctly.
+- [ ] Mic-only, system-only, and mic+system each mux correctly. *(System-only verified by
+      signal: `dev record-audio-test 0 10` → `probe-mp4` audio 9.11 s vs video 9.07 s, 1 kHz
+      tone found, no clock corrections logged. Mic and mic+system verified in memory only with
+      `dev audio-probe --mic` / `--system --mic`: both sources open, full-rate frames, non-zero
+      level; nothing written to disk. A mic recording to MP4 still needs a human listen.)*
 - [ ] A/V stays in sync (±1 frame drift over 3 min).
-- [ ] "No audio device" handled cleanly (records video-only, surfaces a note).
+- [x] `microphone_device` that matches nothing → default microphone used plus the note "the
+      microphone "…" was not found"; a partial name selects the matching device. *(Verified
+      with `dev audio-probe --mic --mic-device …`.)*
+- [ ] "No audio device" / a source that cannot open → the other source still records, the
+      video is saved, and a dialog after the recording lists what is missing. *(Per-source setup
+      and the dialog text are unit-tested; not provoked live: no way to make the mic fail here.)*
+- [ ] Unplugging a USB/Bluetooth microphone mid-recording → the rest of the take has no mic
+      sound, the file is fine, and the dialog says the microphone stopped.
+- [ ] A 24-bit / 5.1 device records audible sound (decode and downmix are unit-tested; this
+      machine's devices are all 32-bit float stereo).
 
 ## M5 — GIF
 - [ ] Short region recording exports an optimised GIF that opens in a browser.

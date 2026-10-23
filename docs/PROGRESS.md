@@ -193,6 +193,17 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Review item (4) — audio. Each source is set up on its own (a failing mic no longer
+  discards system audio); `microphone_device` is honoured (id / name / partial name, falling
+  back to the default with a note); PCM 8/24/32-bit and float64 decode (were silent), channel
+  mask downmix (centre kept), boundary-continuous resampler, `GetMixFormat` freed; device setup
+  overlaps the first-frame wait with a 10 s bound and detaches on timeout; the mixer keeps a
+  stalled source aligned (late audio for a padded span is dropped), a dead device becomes
+  silence; the encoder holds the audio sample clock to the video clock (silence fill / trim
+  beyond 200 ms). Problems become recording notes, shown in one dialog after the file is saved.
+  New `dev list-audio-inputs`, `dev audio-probe` (in memory only). Live: mic, mic + system,
+  bad and partial `--mic-device` via `audio-probe`; `record-audio-test 0 10` → audio 9.11 s /
+  video 9.07 s, 1 kHz. Gate green, **151 tests**.
 - 2026-10-23: **Release 0.1.4** (tag `v0.1.4`): Annotate editor (red rectangle / text, crosshair
   cursor, Shift/Alt+Enter new line), review items (1)–(3) (record-flow busy gate, Quit
   teardown, panic containment; config recovery + user-visible error dialogs; recordings end
