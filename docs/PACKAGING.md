@@ -33,6 +33,12 @@ Releases are built and published by GitHub Actions (`.github/workflows/release.y
    release with both files, titled `RustShot v<version>`. Its notes are the tag message minus
    its first line (which would repeat the title), so start the message with a one-line title.
 
+If the release job fails (for example `cargo-deny` rejecting a crate that was yanked since the
+last green CI run), fix it on `master` and push; then, **if no GitHub release was published**,
+move the tag to the fixed commit (`git push origin :refs/tags/vX.Y.Z`, `git tag -d vX.Y.Z`,
+re-create the annotated tag, push it). If a release was already published, bump the version
+instead of moving its tag.
+
 To (re)attach the zip to a tag that already exists — e.g. one released by hand before this
 workflow existed — run it from **Actions → Release → Run workflow** with that tag. If the release
 already exists, its notes are kept and its assets replaced (a hand-uploaded zip is swapped for

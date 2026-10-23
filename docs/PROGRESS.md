@@ -197,6 +197,9 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
   audio fixes (review item 4), pinned toolchain / cargo-deny / MSRV / release CI (item 5), and
   the medium findings (item 6: DPI scaling, themed controls, GIF timing, atomic saves, strict
   shortcut names, bounded logs, safer editor/overlay window state).
+  The first tag push failed the release job at `cargo-deny`: `clipboard-win 5.4.1` had been
+  yanked since the last green CI run. Updated it to 5.4.3 and moved the unpublished tag to the
+  fixed commit; the workflow then published the release.
 - 2026-10-23: Review item (6) — the medium findings. Overlay copy bounded by `Frame::row` and
   GDI guards; editor state ownership via a thread-local adopted in WM_NCCREATE (no double free),
   no `&mut` state across message boxes / DestroyWindow; Browse picker owned by Settings; flyout
