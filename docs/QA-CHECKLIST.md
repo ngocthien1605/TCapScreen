@@ -61,6 +61,9 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] 60 s 1080p30 monitor recording plays correctly in VLC and Windows Media Player.
 - [ ] Pause/resume produces correct timing (no frozen/!sped-up segments).
 - [ ] Dropped-frame count logged; memory stays bounded (ring buffer) under load.
+- [ ] Read-back throttle: record a video playing full screen at 30 fps output and check the log's
+      `captured` count is about wall-time × 30, not × the display refresh rate. *(Only seen on an
+      idle desktop so far, where WGC barely fires anyway.)*
 - [x] Target window closes mid-record → recording stops and finalises a playable file. *(Verified
       on the release build: `dev record-window` on a test console window killed at 5 s returned
       "ENDED EARLY … the captured window was closed" within 250 ms and `probe-mp4` decoded 121
