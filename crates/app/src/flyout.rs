@@ -35,6 +35,8 @@ const WIN_W: i32 = 500;
 const WIN_H: i32 = 170;
 const DISMISS_MS: u32 = 8000;
 const TIMER_ID: usize = 1;
+/// How soon to look again when the pointer is over the flyout at dismissal time.
+const HOVER_RECHECK_MS: u32 = 1000;
 
 // Child-button control ids.
 const ID_OPEN: usize = 101;
@@ -282,6 +284,16 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
             LRESULT(0)
         }
         WM_TIMER => {
+            // While the pointer is over the flyout the user may be about to click a button:
+            // dismissing now would queue the dismissal ahead of that click and drop it. Check
+            // again shortly instead; the flyout goes once the pointer has left.
+            if cursor_over(hwnd) {
+                // SAFETY: re-arm our own timer (replaces the existing one with the same id).
+                unsafe {
+                    let _ = SetTimer(Some(hwnd), TIMER_ID, HOVER_RECHECK_MS, None);
+                }
+                return LRESULT(0);
+            }
             // SAFETY: one-shot dismissal.
             unsafe {
                 let _ = KillTimer(Some(hwnd), TIMER_ID);
@@ -368,4 +380,19 @@ fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
         dst[3] = src[3];
     }
     out
+}
+
+/// True if the mouse pointer is inside `hwnd`'s window rectangle.
+fn cursor_over(hwnd: HWND) -> bool {
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let mut r = RECT::default();
+    // SAFETY: plain queries into locals.
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt).is_ok()
+            && windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut r).is_ok()
+            && pt.x >= r.left
+            && pt.x < r.right
+            && pt.y >= r.top
+            && pt.y < r.bottom
+    }
 }

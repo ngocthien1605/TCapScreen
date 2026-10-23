@@ -56,6 +56,7 @@ muda = "0.21.2"
 global-hotkey = "0.9.0"
 arboard = { version = "3.7.0", default-features = false }
 rfd = "0.17.2"
+raw-window-handle = "0.6.2"
 
 # CLI (dev commands)
 clap = { version = "4.5.51", features = ["derive"] }

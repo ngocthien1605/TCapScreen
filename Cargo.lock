@@ -85,6 +85,7 @@ dependencies = [
  "embed-resource",
  "global-hotkey",
  "imaging",
+ "raw-window-handle",
  "recorder",
  "rfd",
  "tracing",

@@ -5,6 +5,7 @@
 //! One GDI routine ([`paint_items`]) draws the annotations both on screen and into the exported
 //! image, so what you see is exactly what gets saved.
 
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
@@ -33,11 +34,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
     GetSystemMetrics, GetWindowLongPtrW, LoadCursorW, MessageBoxW, RegisterClassW, SendMessageW,
-    SetWindowLongPtrW, SetWindowTextW, ShowWindow, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA,
-    HMENU, IDC_CROSS, IDNO, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL, SM_CXSCREEN, SM_CYSCREEN,
-    SW_SHOW, WINDOW_EX_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT,
-    WM_SIZE, WM_SYSKEYDOWN, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, CW_USEDEFAULT, GWLP_USERDATA, HMENU, IDC_CROSS,
+    IDNO, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
+    WINDOW_EX_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT, WM_SIZE,
+    WM_SYSKEYDOWN, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 use super::model::{
@@ -81,11 +82,29 @@ struct Ctx {
     high_surrogate: Option<u16>,
 }
 
+impl Drop for Ctx {
+    fn drop(&mut self) {
+        // SAFETY: restore the DC's original object, then free the bitmap and the DC we created.
+        unsafe {
+            SelectObject(self.src_dc, self.src_old);
+            let _ = DeleteObject(HGDIOBJ(self.src_bmp.0));
+            let _ = DeleteDC(self.src_dc);
+        }
+    }
+}
+
+thread_local! {
+    /// The state of a window being created, until its `WM_NCCREATE` adopts it. Whatever is
+    /// still here after `CreateWindowExW` returns was never adopted and is dropped normally, so
+    /// the state is freed exactly once however creation fails.
+    static PENDING: RefCell<Option<Box<Ctx>>> = const { RefCell::new(None) };
+}
+
 /// Open the editor on the screenshot at `path`. Returns immediately; the window lives on the UI
 /// thread's message loop until the user closes it.
 pub fn open(path: &Path) {
     if let Err(e) = try_open(path) {
-        tracing::warn!("could not open the annotation editor: {e:#}");
+        crate::notify::error("The annotation editor could not be opened.", e);
     }
 }
 
@@ -95,7 +114,7 @@ fn try_open(path: &Path) -> Result<()> {
     let (iw, ih) = (image.width() as i32, image.height() as i32);
 
     let (src_dc, src_bmp, src_old) = make_source_dc(&image)?;
-    let mut ctx = Box::new(Ctx {
+    let ctx = Box::new(Ctx {
         editor: Editor::new(iw, ih),
         image,
         src_dc,
@@ -108,9 +127,9 @@ fn try_open(path: &Path) -> Result<()> {
     });
 
     // Size the window to the image where it fits, bounded by the screen.
-    // SAFETY: plain metric queries and window creation; the ctx pointer outlives the window
-    // (it is reclaimed in WM_NCDESTROY).
-    let hwnd = unsafe {
+    // SAFETY: plain metric queries and window creation. The window adopts `ctx` in
+    // WM_NCCREATE (via PENDING) and frees it in WM_NCDESTROY.
+    let created = unsafe {
         let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         let cw = (iw + 2 * MARGIN).clamp(640, (sw * 9 / 10).max(640));
         let ch = (ih + TOOLBAR_H + 2 * MARGIN).clamp(420, (sh * 85 / 100).max(420));
@@ -123,8 +142,8 @@ fn try_open(path: &Path) -> Result<()> {
         let _ = AdjustWindowRect(&mut r, WS_OVERLAPPEDWINDOW, false);
         let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
         let title = HSTRING::from(title_for(path, None));
-        let ptr: *mut Ctx = &mut *ctx;
-        let hwnd = CreateWindowExW(
+        PENDING.with(|p| *p.borrow_mut() = Some(ctx));
+        CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS_NAME,
             PCWSTR(title.as_ptr()),
@@ -136,15 +155,20 @@ fn try_open(path: &Path) -> Result<()> {
             None,
             Some(HMENU(null_mut())),
             Some(hinstance.into()),
-            Some(ptr as *const c_void),
+            None,
         )
-        .context("creating the annotation window")?;
-        // Ownership moves to the window; reclaimed in WM_NCDESTROY.
-        let _ = Box::into_raw(ctx);
-        hwnd
     };
+    // Not adopted (creation failed before WM_NCCREATE): free it here.
+    drop(PENDING.with(|p| p.borrow_mut().take()));
+    let hwnd = created.context("creating the annotation window")?;
 
-    create_toolbar(hwnd)?;
+    if let Err(e) = create_toolbar(hwnd) {
+        // SAFETY: our own window, never shown; WM_NCDESTROY frees its state.
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        return Err(e);
+    }
     // SAFETY: show and focus our own window so typed characters reach it.
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -272,12 +296,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
-        // SAFETY: stash the ctx pointer from CREATESTRUCT.
-        unsafe {
-            let cs = lparam.0 as *const CREATESTRUCTW;
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*cs).lpCreateParams as isize);
-            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        // Adopt the pending state: from here the window owns it until WM_NCDESTROY.
+        if let Some(ctx) = PENDING.with(|p| p.borrow_mut().take()) {
+            // SAFETY: store the owned pointer in our own window's userdata.
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize) };
         }
+        // SAFETY: default processing of WM_NCCREATE.
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
     let Some(ctx) = ctx_of(hwnd) else {
         // SAFETY: default handling before/after our state exists.
@@ -376,7 +401,11 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
             LRESULT(0)
         }
         WM_CLOSE => {
-            if confirm_close(hwnd, ctx) {
+            finish_typing(ctx);
+            let dirty = ctx.dirty;
+            // `ctx` is not used past this point: the message box below pumps messages, and
+            // WM_PAINT & co. re-enter this procedure with their own reference to the state.
+            if confirm_close(hwnd, dirty) {
                 // SAFETY: destroy our own window; WM_NCDESTROY frees the ctx.
                 unsafe {
                     let _ = DestroyWindow(hwnd);
@@ -390,10 +419,7 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
                 let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Ctx;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 if !p.is_null() {
-                    let c = Box::from_raw(p);
-                    SelectObject(c.src_dc, c.src_old);
-                    let _ = DeleteObject(HGDIOBJ(c.src_bmp.0));
-                    let _ = DeleteDC(c.src_dc);
+                    drop(Box::from_raw(p)); // Ctx's Drop releases its GDI objects
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
@@ -674,14 +700,20 @@ fn make_source_dc(img: &Rgba) -> Result<(HDC, HBITMAP, HGDIOBJ)> {
         let screen = windows::Win32::Graphics::Gdi::GetDC(None);
         let mut bits: *mut c_void = null_mut();
         let bmp = CreateDIBSection(Some(screen), &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
+        let bmp = match bmp {
+            Ok(b) if !bits.is_null() => b,
+            Ok(b) => {
+                ReleaseDC(None, screen);
+                let _ = DeleteObject(HGDIOBJ(b.0));
+                return Err(anyhow!("CreateDIBSection returned no pixel buffer"));
+            }
+            Err(e) => {
+                ReleaseDC(None, screen);
+                return Err(anyhow!("CreateDIBSection failed: {e}"));
+            }
+        };
         let dc = CreateCompatibleDC(Some(screen));
         ReleaseDC(None, screen);
-        let bmp = bmp.map_err(|e| anyhow!("CreateDIBSection failed: {e}"))?;
-        if bits.is_null() {
-            let _ = DeleteObject(HGDIOBJ(bmp.0));
-            let _ = DeleteDC(dc);
-            return Err(anyhow!("CreateDIBSection returned no pixel buffer"));
-        }
         let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w as usize) * (h as usize) * 4);
         let (dst_px, _) = dst.as_chunks_mut::<4>();
         let (src_px, _) = img.as_raw().as_chunks::<4>();
@@ -803,9 +835,10 @@ fn copy(hwnd: HWND, ctx: &mut Ctx) {
 }
 
 /// On close with unsaved annotations, ask what to do. Returns true if the window may close.
-fn confirm_close(hwnd: HWND, ctx: &mut Ctx) -> bool {
-    finish_typing(ctx);
-    if !ctx.dirty {
+/// Whether the editor may close; offers to save unsaved work first. Takes no state reference
+/// across the message box (it pumps messages); the state is fetched afresh to save.
+fn confirm_close(hwnd: HWND, dirty: bool) -> bool {
+    if !dirty {
         return true;
     }
     let text = HSTRING::from("Save the annotated screenshot before closing?");
@@ -820,6 +853,9 @@ fn confirm_close(hwnd: HWND, ctx: &mut Ctx) -> bool {
         )
     };
     if answer == IDYES {
+        let Some(ctx) = ctx_of(hwnd) else {
+            return true;
+        };
         save(hwnd, ctx);
         !ctx.dirty // closes only if the save worked
     } else {

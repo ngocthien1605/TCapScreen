@@ -945,8 +945,11 @@ fn get_text(hwnd: HWND, id: i32) -> String {
 }
 
 fn browse(hwnd: HWND) {
+    // Owned by the Settings dialog, so the picker is modal to it: OK/Cancel and a second
+    // Browse can't run underneath it, and the result can't land in a dialog that has ended.
     if let Some(folder) = rfd::FileDialog::new()
         .set_title("Choose the RustShot output folder")
+        .set_parent(&Owner(hwnd))
         .pick_folder()
     {
         let wide: Vec<u16> = folder.to_string_lossy().encode_utf16().chain([0]).collect();
@@ -954,6 +957,31 @@ fn browse(hwnd: HWND) {
         unsafe {
             let _ = SetDlgItemTextW(hwnd, EDIT_FOLDER, PCWSTR(wide.as_ptr()));
         }
+    }
+}
+
+/// A dialog window as a parent for `rfd`'s pickers.
+struct Owner(HWND);
+
+impl raw_window_handle::HasWindowHandle for Owner {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let hwnd = std::num::NonZeroIsize::new(self.0 .0 as isize)
+            .ok_or(raw_window_handle::HandleError::Unavailable)?;
+        let raw = raw_window_handle::RawWindowHandle::Win32(
+            raw_window_handle::Win32WindowHandle::new(hwnd),
+        );
+        // SAFETY: the dialog outlives the modal picker that borrows its handle.
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for Owner {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Ok(raw_window_handle::DisplayHandle::windows())
     }
 }
 

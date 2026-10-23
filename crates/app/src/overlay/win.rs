@@ -8,7 +8,7 @@
 //! recaptured cleanly (windows) — the overlay pixels can't leak into either path.
 
 use std::ffi::c_void;
-use std::ptr::{copy_nonoverlapping, null_mut, write_bytes};
+use std::ptr::null_mut;
 use std::sync::Once;
 
 use anyhow::{Context, Result};
@@ -20,9 +20,8 @@ use windows::Win32::Graphics::Gdi::{
     CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect,
     GetStockObject, GetTextExtentPoint32W, InvalidateRect, Rectangle, ReleaseDC, SelectObject,
     SetBkColor, SetBkMode, SetTextColor, TextOutW, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER,
-    BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS,
-    HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, OPAQUE, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    PS_SOLID, SRCCOPY,
+    BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, HBRUSH,
+    HDC, HGDIOBJ, HOLLOW_BRUSH, OPAQUE, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
@@ -182,13 +181,19 @@ impl OverlayCtx {
             .unwrap_or(Rect::new(0, 0, 0, 0))
     }
 
-    fn finish(&mut self, outcome: Outcome, hwnd: HWND) {
+    /// Record the result. The caller then calls [`close`] with no live reference to the ctx:
+    /// destroying the window re-enters the window procedure (WM_DESTROY), which makes its own.
+    fn conclude(&mut self, outcome: Outcome) {
         self.outcome = Some(outcome);
         self.done = true;
-        // SAFETY: `hwnd` is this overlay's window; destroying it ends the nested loop.
-        unsafe {
-            let _ = DestroyWindow(hwnd);
-        }
+    }
+}
+
+/// Destroy the overlay window, which ends the nested loop.
+fn close(hwnd: HWND) {
+    // SAFETY: `hwnd` is this overlay's window.
+    unsafe {
+        let _ = DestroyWindow(hwnd);
     }
 }
 
@@ -253,7 +258,8 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
             }
             let p = Point::new(loword(lparam) + ctx.origin.x, hiword(lparam) + ctx.origin.y);
             if let Some(outcome) = ctx.state.on_up(p) {
-                ctx.finish(outcome, hwnd);
+                ctx.conclude(outcome);
+                close(hwnd);
             } else {
                 invalidate(hwnd);
             }
@@ -264,12 +270,14 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
         WM_RBUTTONDOWN => LRESULT(0),
         WM_RBUTTONUP => {
             let outcome = ctx.state.on_cancel();
-            ctx.finish(outcome, hwnd);
+            ctx.conclude(outcome);
+            close(hwnd);
             LRESULT(0)
         }
         WM_KEYDOWN => {
             if let Some(outcome) = ctx.state.on_key(wparam.0 as u32) {
-                ctx.finish(outcome, hwnd);
+                ctx.conclude(outcome);
+                close(hwnd);
             }
             LRESULT(0)
         }
@@ -303,12 +311,12 @@ fn paint(hwnd: HWND, ctx: &mut OverlayCtx) {
 
         // 1. bright frozen desktop into the back-buffer.
         let _ = BitBlt(
-            g.back_dc,
+            g.back.dc,
             0,
             0,
             ctx.width,
             ctx.height,
-            Some(g.screen_dc),
+            Some(g.screen.dc),
             0,
             0,
             SRCCOPY,
@@ -321,7 +329,7 @@ fn paint(hwnd: HWND, ctx: &mut OverlayCtx) {
             AlphaFormat: 0,
         };
         let _ = AlphaBlend(
-            g.back_dc, 0, 0, ctx.width, ctx.height, g.dim_dc, 0, 0, 1, 1, blend,
+            g.back.dc, 0, 0, ctx.width, ctx.height, g.dim.dc, 0, 0, 1, 1, blend,
         );
 
         // 3. restore brightness + outline the current selection or hovered window.
@@ -333,12 +341,12 @@ fn paint(hwnd: HWND, ctx: &mut OverlayCtx) {
             let cr = ctx.to_client(vrect);
             if !cr.is_empty() {
                 let _ = BitBlt(
-                    g.back_dc,
+                    g.back.dc,
                     cr.x,
                     cr.y,
                     cr.width,
                     cr.height,
-                    Some(g.screen_dc),
+                    Some(g.screen.dc),
                     cr.x,
                     cr.y,
                     SRCCOPY,
@@ -360,7 +368,7 @@ fn paint(hwnd: HWND, ctx: &mut OverlayCtx) {
             0,
             ctx.width,
             ctx.height,
-            Some(g.back_dc),
+            Some(g.back.dc),
             0,
             0,
             SRCCOPY,
@@ -376,7 +384,10 @@ fn draw_crosshair(ctx: &OverlayCtx, g: &Gdi) {
         ctx.state.cursor().x - ctx.origin.x,
         ctx.state.cursor().y - ctx.origin.y,
     );
-    for (grow, brush) in [(1, g.edge_brush), (0, g.line_brush)] {
+    for (grow, brush) in [
+        (1, HBRUSH(g.edge_brush.0 .0)),
+        (0, HBRUSH(g.line_brush.0 .0)),
+    ] {
         for bar in crosshair_bars(c, ctx.width, ctx.height, grow) {
             let r = RECT {
                 left: bar.x,
@@ -386,7 +397,7 @@ fn draw_crosshair(ctx: &OverlayCtx, g: &Gdi) {
             };
             // SAFETY: fills a rectangle in our back-buffer DC with a brush we own; GDI clips it.
             unsafe {
-                FillRect(g.back_dc, &r, brush);
+                FillRect(g.back.dc, &r, brush);
             }
         }
     }
@@ -395,11 +406,11 @@ fn draw_crosshair(ctx: &OverlayCtx, g: &Gdi) {
 fn draw_border(g: &Gdi, cr: Rect) {
     // SAFETY: selects our pen + a hollow brush and strokes a rectangle outline.
     unsafe {
-        let old_pen = SelectObject(g.back_dc, HGDIOBJ(g.pen.0));
-        let old_brush = SelectObject(g.back_dc, GetStockObject(HOLLOW_BRUSH));
-        let _ = Rectangle(g.back_dc, cr.x, cr.y, cr.right(), cr.bottom());
-        SelectObject(g.back_dc, old_pen);
-        SelectObject(g.back_dc, old_brush);
+        let old_pen = SelectObject(g.back.dc, g.pen.0);
+        let old_brush = SelectObject(g.back.dc, GetStockObject(HOLLOW_BRUSH));
+        let _ = Rectangle(g.back.dc, cr.x, cr.y, cr.right(), cr.bottom());
+        SelectObject(g.back.dc, old_pen);
+        SelectObject(g.back.dc, old_brush);
     }
 }
 
@@ -408,18 +419,18 @@ fn draw_label(ctx: &OverlayCtx, g: &Gdi, vrect: Rect) {
     let wide: Vec<u16> = text.encode_utf16().collect();
     // SAFETY: GDI text drawing into the back-buffer with our font/colours.
     unsafe {
-        let old_font = SelectObject(g.back_dc, HGDIOBJ(g.font.0));
+        let old_font = SelectObject(g.back.dc, g.font.0);
         let mut sz = SIZE::default();
-        let _ = GetTextExtentPoint32W(g.back_dc, &wide, &mut sz);
+        let _ = GetTextExtentPoint32W(g.back.dc, &wide, &mut sz);
         let bounds = Rect::new(ctx.origin.x, ctx.origin.y, ctx.width, ctx.height);
         let pos_v = label_position(ctx.state.cursor(), sz.cx + 10, sz.cy + 6, bounds);
         let cx = pos_v.x - ctx.origin.x;
         let cy = pos_v.y - ctx.origin.y;
-        SetBkMode(g.back_dc, OPAQUE);
-        SetBkColor(g.back_dc, rgb(20, 22, 26));
-        SetTextColor(g.back_dc, rgb(240, 240, 245));
-        let _ = TextOutW(g.back_dc, cx + 5, cy + 3, &wide);
-        SelectObject(g.back_dc, old_font);
+        SetBkMode(g.back.dc, OPAQUE);
+        SetBkColor(g.back.dc, rgb(20, 22, 26));
+        SetTextColor(g.back.dc, rgb(240, 240, 245));
+        let _ = TextOutW(g.back.dc, cx + 5, cy + 3, &wide);
+        SelectObject(g.back.dc, old_font);
     }
 }
 
@@ -428,147 +439,224 @@ fn rgb(r: u8, gc: u8, b: u8) -> COLORREF {
 }
 
 /// GDI resources backing the overlay: a memory DC with the frozen desktop, a 1×1 black DC for
-/// dimming, a back-buffer, a border pen, and a label font.
+/// dimming, a back-buffer, a border pen, and a label font. Each piece owns its handles, so a
+/// failure part-way through [`Gdi::new`] releases whatever was already created.
 struct Gdi {
-    screen_dc: HDC,
-    screen_bmp: HBITMAP,
-    screen_old: HGDIOBJ,
-    dim_dc: HDC,
-    dim_bmp: HBITMAP,
-    dim_old: HGDIOBJ,
-    back_dc: HDC,
-    back_bmp: HBITMAP,
-    back_old: HGDIOBJ,
-    pen: windows::Win32::Graphics::Gdi::HPEN,
-    line_brush: HBRUSH,
-    edge_brush: HBRUSH,
-    font: HFONT,
+    screen: Surface,
+    dim: Surface,
+    back: Surface,
+    pen: GdiObj,
+    line_brush: GdiObj,
+    edge_brush: GdiObj,
+    font: GdiObj,
 }
 
 impl Gdi {
     fn new(frozen: &Frame, w: i32, h: i32) -> Result<Gdi> {
-        // SAFETY: GDI object creation; failures are checked and the Drop impl cleans up.
-        unsafe {
-            let screen = windows::Win32::Graphics::Gdi::GetDC(None);
-            let (screen_dc, screen_bmp, screen_old) = make_dib(screen, w, h, Some(frozen))?;
-            let (dim_dc, dim_bmp, dim_old) = make_dib(screen, 1, 1, None)?;
+        let screen_dc = ScreenDc::get()?;
+        let screen = Surface::dib(screen_dc.0, w, h, Some(frozen))?;
+        let dim = Surface::dib(screen_dc.0, 1, 1, None)?;
+        let back = Surface::compatible(screen_dc.0, w, h)?;
+        drop(screen_dc);
 
-            let back_dc = CreateCompatibleDC(Some(screen));
-            let back_bmp = CreateCompatibleBitmap(screen, w, h);
-            let back_old = SelectObject(back_dc, HGDIOBJ(back_bmp.0));
-            ReleaseDC(None, screen);
-
-            let pen = CreatePen(PS_SOLID, 2, rgb(255, 0, 0));
-            let line_brush = CreateSolidBrush(rgb(255, 255, 255));
-            let edge_brush = CreateSolidBrush(rgb(0, 0, 0));
-            let font = CreateFontW(
-                -20,
-                0,
-                0,
-                0,
-                600,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                0,
-                w!("Segoe UI"),
-            );
-
-            Ok(Gdi {
-                screen_dc,
-                screen_bmp,
-                screen_old,
-                dim_dc,
-                dim_bmp,
-                dim_old,
-                back_dc,
-                back_bmp,
-                back_old,
-                pen,
-                line_brush,
-                edge_brush,
-                font,
-            })
-        }
+        // SAFETY: plain GDI object creation; each handle is owned by a `GdiObj`.
+        let (pen, line_brush, edge_brush, font) = unsafe {
+            (
+                GdiObj::new(CreatePen(PS_SOLID, 2, rgb(255, 0, 0)).0)?,
+                GdiObj::new(CreateSolidBrush(rgb(255, 255, 255)).0)?,
+                GdiObj::new(CreateSolidBrush(rgb(0, 0, 0)).0)?,
+                GdiObj::new(
+                    CreateFontW(
+                        -20,
+                        0,
+                        0,
+                        0,
+                        600,
+                        0,
+                        0,
+                        0,
+                        DEFAULT_CHARSET,
+                        OUT_DEFAULT_PRECIS,
+                        CLIP_DEFAULT_PRECIS,
+                        CLEARTYPE_QUALITY,
+                        0,
+                        w!("Segoe UI"),
+                    )
+                    .0,
+                )?,
+            )
+        };
+        Ok(Gdi {
+            screen,
+            dim,
+            back,
+            pen,
+            line_brush,
+            edge_brush,
+            font,
+        })
     }
 }
 
-impl Drop for Gdi {
+/// The screen DC, released on drop.
+struct ScreenDc(HDC);
+
+impl ScreenDc {
+    fn get() -> Result<ScreenDc> {
+        // SAFETY: GetDC(NULL) returns the screen DC or null.
+        let dc = unsafe { windows::Win32::Graphics::Gdi::GetDC(None) };
+        anyhow::ensure!(!dc.is_invalid(), "GetDC failed");
+        Ok(ScreenDc(dc))
+    }
+}
+
+impl Drop for ScreenDc {
     fn drop(&mut self) {
-        // SAFETY: restore selected objects then delete everything we created.
+        // SAFETY: obtained from GetDC(NULL) above.
+        unsafe { ReleaseDC(None, self.0) };
+    }
+}
+
+/// A GDI object (pen, brush, font, bitmap), deleted on drop.
+struct GdiObj(HGDIOBJ);
+
+impl GdiObj {
+    fn new(raw: *mut c_void) -> Result<GdiObj> {
+        anyhow::ensure!(!raw.is_null(), "GDI object creation failed");
+        Ok(GdiObj(HGDIOBJ(raw)))
+    }
+}
+
+impl Drop for GdiObj {
+    fn drop(&mut self) {
+        // SAFETY: we created this object and it is no longer selected into a DC (the owning
+        // `Surface` restores its DC's original object before the bitmap is deleted).
         unsafe {
-            SelectObject(self.screen_dc, self.screen_old);
-            let _ = DeleteObject(HGDIOBJ(self.screen_bmp.0));
-            let _ = DeleteDC(self.screen_dc);
-            SelectObject(self.dim_dc, self.dim_old);
-            let _ = DeleteObject(HGDIOBJ(self.dim_bmp.0));
-            let _ = DeleteDC(self.dim_dc);
-            SelectObject(self.back_dc, self.back_old);
-            let _ = DeleteObject(HGDIOBJ(self.back_bmp.0));
-            let _ = DeleteDC(self.back_dc);
-            let _ = DeleteObject(HGDIOBJ(self.pen.0));
-            let _ = DeleteObject(HGDIOBJ(self.line_brush.0));
-            let _ = DeleteObject(HGDIOBJ(self.edge_brush.0));
-            let _ = DeleteObject(HGDIOBJ(self.font.0));
+            let _ = DeleteObject(self.0);
         }
     }
 }
 
-/// Create a top-down 32-bpp DIB section in a fresh memory DC, optionally filling it with a
-/// frozen frame's pixels (BGRA, stride-aware). Returns the DC, bitmap, and the previously
-/// selected object (to restore on drop).
-unsafe fn make_dib(
-    ref_dc: HDC,
-    w: i32,
-    h: i32,
-    src: Option<&Frame>,
-) -> Result<(HDC, HBITMAP, HGDIOBJ)> {
-    let mut bmi = BITMAPINFO::default();
-    bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-    bmi.bmiHeader.biWidth = w;
-    bmi.bmiHeader.biHeight = -h; // negative = top-down, matching our frame layout
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = 0; // BI_RGB
+/// A memory DC with a bitmap selected into it. Dropping restores the DC's original object, then
+/// deletes the DC and the bitmap.
+struct Surface {
+    dc: HDC,
+    old: HGDIOBJ,
+    _bitmap: GdiObj,
+}
 
-    let mut bits: *mut c_void = null_mut();
-    // SAFETY: valid BITMAPINFO; `bits` receives the pixel pointer.
-    let bmp = unsafe {
-        CreateDIBSection(Some(ref_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-            .context("CreateDIBSection")?
-    };
-    // SAFETY: a memory DC compatible with the reference DC.
-    let dc = unsafe { CreateCompatibleDC(Some(ref_dc)) };
-    // SAFETY: select the DIB into its DC.
-    let old = unsafe { SelectObject(dc, HGDIOBJ(bmp.0)) };
+impl Surface {
+    /// Select `bitmap` into a fresh memory DC compatible with `ref_dc`.
+    fn select(ref_dc: HDC, bitmap: GdiObj) -> Result<Surface> {
+        // SAFETY: a memory DC compatible with the reference DC.
+        let dc = unsafe { CreateCompatibleDC(Some(ref_dc)) };
+        anyhow::ensure!(!dc.is_invalid(), "CreateCompatibleDC failed");
+        // SAFETY: select the bitmap into its own DC.
+        let old = unsafe { SelectObject(dc, bitmap.0) };
+        Ok(Surface {
+            dc,
+            old,
+            _bitmap: bitmap,
+        })
+    }
 
-    let ptr = bits as *mut u8;
-    if !ptr.is_null() {
-        match src {
-            Some(f) => {
-                let row = (w as usize) * 4;
-                for y in 0..h as usize {
-                    // SAFETY: both buffers hold at least `row` bytes at these offsets.
-                    unsafe {
-                        copy_nonoverlapping(
-                            f.data.as_ptr().add(y * f.stride),
-                            ptr.add(y * row),
-                            row,
-                        );
-                    }
-                }
-            }
-            None => {
-                // SAFETY: zero the (tiny) 1×1 buffer.
-                unsafe {
-                    write_bytes(ptr, 0, (w as usize) * (h as usize) * 4);
-                }
-            }
+    /// A device-compatible bitmap of `w`×`h` (the back buffer).
+    fn compatible(ref_dc: HDC, w: i32, h: i32) -> Result<Surface> {
+        // SAFETY: plain bitmap creation.
+        let bmp = unsafe { CreateCompatibleBitmap(ref_dc, w, h) };
+        Surface::select(ref_dc, GdiObj::new(bmp.0)?)
+    }
+
+    /// A top-down 32-bpp DIB section, optionally filled with a frozen frame's pixels (BGRA,
+    /// stride-aware). Rows or columns the frame doesn't cover — the display layout changed
+    /// between the freeze and the overlay — stay black instead of being read out of bounds.
+    fn dib(ref_dc: HDC, w: i32, h: i32, src: Option<&Frame>) -> Result<Surface> {
+        let mut bmi = BITMAPINFO::default();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = w;
+        bmi.bmiHeader.biHeight = -h; // negative = top-down, matching our frame layout
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = 0; // BI_RGB
+
+        let mut bits: *mut c_void = null_mut();
+        // SAFETY: valid BITMAPINFO; `bits` receives the pixel pointer.
+        let bmp = unsafe {
+            CreateDIBSection(Some(ref_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+                .context("CreateDIBSection")?
+        };
+        let bitmap = GdiObj::new(bmp.0)?;
+        anyhow::ensure!(!bits.is_null(), "CreateDIBSection returned no pixels");
+        let row = w.max(0) as usize * 4;
+        // SAFETY: a w×h 32-bpp top-down DIB section has exactly `row * h` bytes at `bits`, and
+        // nothing else references them yet.
+        let dst =
+            unsafe { std::slice::from_raw_parts_mut(bits as *mut u8, row * h.max(0) as usize) };
+        dst.fill(0);
+        if let Some(f) = src {
+            copy_frame(f, dst, row);
+        }
+        Surface::select(ref_dc, bitmap)
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        // SAFETY: restore the original object, then delete the DC; the bitmap (no longer
+        // selected) is deleted by its `GdiObj` right after.
+        unsafe {
+            SelectObject(self.dc, self.old);
+            let _ = DeleteDC(self.dc);
         }
     }
-    Ok((dc, bmp, old))
+}
+
+/// Copy `f` into a tightly packed BGRA buffer `row` bytes wide, clipping to whichever is
+/// smaller. Uncovered parts of `dst` are left as they are.
+fn copy_frame(f: &Frame, dst: &mut [u8], row: usize) {
+    if row == 0 {
+        return;
+    }
+    for (y, out) in dst.chunks_exact_mut(row).enumerate() {
+        let Some(src) = f.row(y as u32) else {
+            break;
+        };
+        let n = src.len().min(out.len());
+        out[..n].copy_from_slice(&src[..n]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(w: u32, h: u32, stride: usize, fill: u8) -> Frame {
+        Frame {
+            data: vec![fill; stride * h as usize],
+            width: w,
+            height: h,
+            stride,
+            format: capture_core::PixelFmt::Bgra8,
+            timestamp: std::time::Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn copy_frame_clips_a_frame_smaller_than_the_overlay() {
+        // Overlay 4×3, frozen frame only 2×2 (the display shrank): no overrun, rest stays 0.
+        let mut dst = vec![0u8; 4 * 4 * 3];
+        copy_frame(&frame(2, 2, 2 * 4 + 8, 7), &mut dst, 4 * 4);
+        for (y, row) in dst.as_chunks::<16>().0.iter().enumerate() {
+            let expect_lit = if y < 2 { 8 } else { 0 };
+            assert!(row[..expect_lit].iter().all(|&b| b == 7), "row {y}");
+            assert!(row[expect_lit..].iter().all(|&b| b == 0), "row {y}");
+        }
+    }
+
+    #[test]
+    fn copy_frame_crops_a_frame_larger_than_the_overlay() {
+        let mut dst = vec![0u8; 2 * 4 * 2];
+        copy_frame(&frame(5, 5, 5 * 4, 9), &mut dst, 2 * 4);
+        assert!(dst.iter().all(|&b| b == 9));
+    }
 }
