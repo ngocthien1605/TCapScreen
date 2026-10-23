@@ -119,15 +119,17 @@ pub struct AppState {
 /// Set the tray tooltip from the current hotkey state ("N hotkeys unavailable", or idle).
 /// Called at startup and whenever the hotkeys are re-registered.
 pub fn refresh_tray_tooltip() {
-    with_app(|a| {
-        if let Some(tray) = &a.tray {
-            let tip = a
-                .hotkeys
-                .as_ref()
-                .map_or_else(|| "RustShot".to_string(), |h| h.tooltip());
-            let _ = tray.set_tooltip(Some(tip));
-        }
-    });
+    // Copy out under the borrow, call the shell outside it (the rule for every shell call).
+    let Some((Some(tray), tip)) = with_app(|a| {
+        let tip = a
+            .hotkeys
+            .as_ref()
+            .map_or_else(|| "RustShot".to_string(), |h| h.tooltip());
+        (a.tray.clone(), tip)
+    }) else {
+        return;
+    };
+    let _ = tray.set_tooltip(Some(tip));
 }
 
 thread_local! {

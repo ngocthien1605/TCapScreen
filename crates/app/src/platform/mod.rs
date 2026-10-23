@@ -22,6 +22,8 @@ pub(crate) fn win_rect(r: Rect) -> RECT {
 /// a timer, or an action posted by another program — and the window would then show up
 /// topmost without the keyboard, so Esc/Enter would go to whatever app had focus. Attaching to
 /// the foreground thread's input queue for the call is the documented way around that.
+/// Caveat of the technique: if the foreground app's UI thread is hung, the calls made while
+/// attached can stall until it responds.
 pub(crate) fn bring_to_front(hwnd: windows::Win32::Foundation::HWND) {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;

@@ -193,6 +193,10 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: **Release 0.1.6** (tag `v0.1.6`): the app crate refactor (review item 7, two
+  binaries: `rustshot.exe` ships, `rustshot-dev.exe` is for development) and the small fixes
+  (config bounds and `schema_version`, overlay focus for delayed shots, Settings taskbar
+  button, tray tooltip refresh, disk-full reporting, test hygiene).
 - 2026-10-23: Review item (7) — app crate refactor: library + `rustshot` (tray) and
   `rustshot-dev` (console diagnostics) binaries, the parent-console hack removed; dev commands
   return `Result` with shared steps (960 → 616 lines, outputs unchanged); `settings_ui` split
