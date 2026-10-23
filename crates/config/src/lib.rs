@@ -13,7 +13,7 @@ use thiserror::Error;
 pub mod hotkey;
 pub mod paths;
 
-pub use hotkey::{Hotkey, HotkeyMap, Modifier};
+pub use hotkey::{Hotkey, HotkeyMap, Modifier, NAMED_KEYS};
 
 /// Errors from loading or saving configuration.
 #[derive(Debug, Error)]

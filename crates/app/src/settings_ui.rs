@@ -409,9 +409,13 @@ fn map_to_strings(m: &HotkeyMap) -> [String; 6] {
 fn strings_to_map(strs: &[String; 6]) -> Result<HotkeyMap, String> {
     let mut parsed = Vec::with_capacity(6);
     for (i, raw) in strs.iter().enumerate() {
+        // `from_str` rejects unknown key names; the second check guards the registration
+        // mapping, so a shortcut accepted here is one that can actually be registered.
         match config::Hotkey::from_str(raw) {
-            Ok(h) => parsed.push(h),
-            Err(_) => {
+            Ok(h) if h.is_empty() || crate::hotkeys::key_to_code(&h.key).is_some() => {
+                parsed.push(h)
+            }
+            _ => {
                 return Err(format!(
                     "\"{}\" is not a valid shortcut for {}.",
                     raw.trim(),
@@ -1020,6 +1024,18 @@ fn vk_to_key(vk: u16) -> Option<String> {
         0x24 => Some("Home".to_string()),
         0x23 => Some("End".to_string()),
         0x09 => Some("Tab".to_string()),
+        0x25 => Some("ArrowLeft".to_string()),
+        0x26 => Some("ArrowUp".to_string()),
+        0x27 => Some("ArrowRight".to_string()),
+        0x28 => Some("ArrowDown".to_string()),
+        0x13 => Some("Pause".to_string()),
+        0x91 => Some("ScrollLock".to_string()),
+        0x60..=0x69 => Some(format!("Numpad{}", vk - 0x60)),
+        0x6A => Some("NumpadMultiply".to_string()),
+        0x6B => Some("NumpadAdd".to_string()),
+        0x6D => Some("NumpadSubtract".to_string()),
+        0x6E => Some("NumpadDecimal".to_string()),
+        0x6F => Some("NumpadDivide".to_string()),
         _ => None,
     }
 }
@@ -1347,7 +1363,7 @@ mod tests {
         // real Code, or a captured shortcut would silently fail to re-parse / register.
         let samples = [
             0x41, 0x5A, 0x30, 0x39, 0x70, 0x87, 0x2C, 0x20, 0x2E, 0x2D, 0x21, 0x22, 0x24, 0x23,
-            0x09,
+            0x09, 0x25, 0x26, 0x27, 0x28, 0x13, 0x91, 0x60, 0x69, 0x6A, 0x6B, 0x6D, 0x6E, 0x6F,
         ];
         for vk in samples {
             let key = vk_to_key(vk).unwrap();
@@ -1359,6 +1375,35 @@ mod tests {
         }
         assert!(vk_to_key(VK_SHIFT).is_none());
         assert!(is_modifier_vk(VK_CONTROL) && !is_modifier_vk(0x41));
+    }
+
+    #[test]
+    fn every_key_config_accepts_can_be_registered() {
+        // config decides which names parse; hotkeys::key_to_code decides which register. They
+        // must agree, or Settings would accept a shortcut that silently never fires.
+        let mut keys: Vec<String> = config::NAMED_KEYS.iter().map(|k| k.to_string()).collect();
+        keys.extend(('A'..='Z').chain('0'..='9').map(|c| c.to_string()));
+        keys.extend((1..=24).map(|n| format!("F{n}")));
+        for key in keys {
+            assert!(config::Hotkey::is_known_key(&key), "not known: {key}");
+            assert!(
+                crate::hotkeys::key_to_code(&key).is_some(),
+                "unmappable: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn strings_to_map_rejects_keys_that_cannot_register() {
+        let mut strs = map_to_strings(&HotkeyMap::default());
+        strs[0] = "Ctrl+F99".into();
+        assert!(strs_err(&strs).contains("Region"), "{}", strs_err(&strs));
+        strs[0] = "Ctrl+ArrowUp".into();
+        assert!(strings_to_map(&strs).is_ok());
+    }
+
+    fn strs_err(strs: &[String; 6]) -> String {
+        strings_to_map(strs).unwrap_err()
     }
 
     #[test]

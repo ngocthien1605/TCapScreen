@@ -8,6 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+/// Daily log files kept (two weeks); older ones are deleted at rotation.
+const KEEP_LOG_FILES: usize = 14;
+/// Size at which `panic.log` is rolled over to `panic.log.old`.
+const MAX_PANIC_LOG_BYTES: u64 = 1024 * 1024;
+
 /// Where the log files live, once [`init`] has run (used by the panic hook).
 static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
 
@@ -29,10 +34,15 @@ pub fn write_panic_line(line: &str) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Bounded too: past the cap the old file is kept once as `panic.log.old`.
+    let path = dir.join("panic.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_PANIC_LOG_BYTES) {
+        let _ = std::fs::rename(&path, dir.join("panic.log.old"));
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("panic.log"))
+        .open(&path)
     {
         let _ = writeln!(f, "[unix {secs}] {line}");
         let _ = f.flush();
@@ -62,7 +72,25 @@ pub fn init(logs_dir: &Path) -> Option<WorkerGuard> {
     match std::fs::create_dir_all(logs_dir) {
         Ok(()) => {
             let _ = LOGS_DIR.set(logs_dir.to_path_buf());
-            let file_appender = tracing_appender::rolling::daily(logs_dir, "rustshot.log");
+            // One file per day (`rustshot.log.YYYY-MM-DD`), keeping the newest
+            // [`KEEP_LOG_FILES`]: a tray app runs for months, and the folder must not grow
+            // forever. Falls back to stderr-only if the appender can't be built.
+            let file_appender = match tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix("rustshot.log")
+                .max_log_files(KEEP_LOG_FILES)
+                .build(logs_dir)
+            {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = tracing_subscriber::registry()
+                        .with(filter)
+                        .with(stderr_layer)
+                        .try_init();
+                    tracing::warn!("could not open the log file in {}: {e}", logs_dir.display());
+                    return None;
+                }
+            };
             let (nb, guard) = tracing_appender::non_blocking(file_appender);
             let file_layer = fmt::layer()
                 .with_writer(nb)

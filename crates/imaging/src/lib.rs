@@ -185,27 +185,118 @@ fn rgba_to_rgb(img: &RgbaImage) -> RgbImage {
     out
 }
 
-/// Save an image to `path`, choosing the encoder from the file extension (png/jpg/jpeg).
-pub fn save_image(img: &RgbaImage, path: &Path, jpeg_quality: u8) -> Result<(), ImagingError> {
+/// Encode for `path`'s extension (png/jpg/jpeg; anything else is PNG).
+fn encode_for(img: &RgbaImage, path: &Path, jpeg_quality: u8) -> Result<Vec<u8>, ImagingError> {
     let ext = path
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("png")
         .to_ascii_lowercase();
-    let bytes = match ext.as_str() {
-        "jpg" | "jpeg" => encode_jpeg(img, jpeg_quality)?,
-        _ => encode_png(img)?,
-    };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| ImagingError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+    match ext.as_str() {
+        "jpg" | "jpeg" => encode_jpeg(img, jpeg_quality),
+        _ => encode_png(img),
     }
-    std::fs::write(path, &bytes).map_err(|source| ImagingError::Io {
+}
+
+fn io_err(path: &Path) -> impl FnOnce(std::io::Error) -> ImagingError + '_ {
+    move |source| ImagingError::Io {
         path: path.to_path_buf(),
         source,
+    }
+}
+
+/// Write `bytes` to `path` via a temporary sibling and a rename, so a crash or full disk
+/// mid-write never leaves a truncated file under the final name. Replaces an existing file.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ImagingError> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, bytes).map_err(io_err(&tmp))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io_err(path)(e)
     })
+}
+
+/// Save an image to `path`, choosing the encoder from the file extension (png/jpg/jpeg). The
+/// write is atomic (temporary file + rename); an existing file at `path` is replaced.
+pub fn save_image(img: &RgbaImage, path: &Path, jpeg_quality: u8) -> Result<(), ImagingError> {
+    let bytes = encode_for(img, path, jpeg_quality)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io_err(parent))?;
+    }
+    write_atomic(path, &bytes)
+}
+
+/// Save an image in `dir` under `file_name`, or `stem_2.ext`, `stem_3.ext`, … if taken, and
+/// return the path used. The name is claimed with an exclusive create before anything is
+/// written, so two saves in the same second can never pick (and overwrite) the same file, and
+/// the content is then written atomically over that placeholder.
+pub fn save_image_unique(
+    img: &RgbaImage,
+    dir: &Path,
+    file_name: &str,
+    jpeg_quality: u8,
+) -> Result<PathBuf, ImagingError> {
+    let bytes = encode_for(img, Path::new(file_name), jpeg_quality)?;
+    std::fs::create_dir_all(dir).map_err(io_err(dir))?;
+    let mut last_err = None;
+    for name in candidate_names(file_name) {
+        let path = dir.join(&name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(placeholder) => {
+                drop(placeholder);
+                return match write_atomic(&path, &bytes) {
+                    Ok(()) => Ok(path),
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&path);
+                        Err(e)
+                    }
+                };
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                last_err = Some(io_err(&path)(e));
+                break;
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        io_err(dir)(std::io::Error::other(format!(
+            "no free file name for {file_name}"
+        )))
+    }))
+}
+
+/// `file_name`, then `stem_2.ext` … `stem_9999.ext`, then a last name made unique by the
+/// process id and the current time.
+fn candidate_names(file_name: &str) -> impl Iterator<Item = String> + '_ {
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_name);
+    let ext = path.extension().and_then(|s| s.to_str());
+    let with = move |suffix: String| match ext {
+        Some(e) => format!("{stem}_{suffix}.{e}"),
+        None => format!("{stem}_{suffix}"),
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::iter::once(file_name.to_string())
+        .chain((2..10_000).map(move |n| with(n.to_string())))
+        .chain(std::iter::once(with(format!(
+            "{}-{nanos}",
+            std::process::id()
+        ))))
 }
 
 /// Heuristic: is the image almost entirely black? Protected/DRM windows captured via WGC come
@@ -265,31 +356,15 @@ pub fn auto_name(ts: Timestamp, ext: &str) -> String {
     )
 }
 
-/// Resolve a non-colliding path in `dir` for `file_name`. If it exists, append `_2`, `_3`, …
-/// before the extension until a free name is found.
+/// Resolve a path in `dir` for `file_name` that does not exist yet: `file_name`, else
+/// `stem_2.ext`, `stem_3.ext`, … Nothing is created, so prefer [`save_image_unique`] when this
+/// process writes the file itself; this is for writers that create the file on their own (the
+/// video encoder). Never returns an existing file.
 pub fn unique_path(dir: &Path, file_name: &str) -> PathBuf {
-    let candidate = dir.join(file_name);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let path = Path::new(file_name);
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(file_name);
-    let ext = path.extension().and_then(|s| s.to_str());
-    for n in 2..10_000 {
-        let name = match ext {
-            Some(e) => format!("{stem}_{n}.{e}"),
-            None => format!("{stem}_{n}"),
-        };
-        let candidate = dir.join(&name);
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    // Pathological fallback: overwrite the base name rather than loop forever.
-    dir.join(file_name)
+    candidate_names(file_name)
+        .map(|name| dir.join(name))
+        .find(|p| !p.exists())
+        .unwrap_or_else(|| dir.join(file_name))
 }
 
 #[cfg(test)]
@@ -438,6 +513,57 @@ mod tests {
         };
         assert_eq!(auto_name(ts, "png"), "RustShot_2026-10-22_09-07-03.png");
         assert_eq!(auto_name(ts, "jpg"), "RustShot_2026-10-22_09-07-03.jpg");
+    }
+
+    #[test]
+    fn save_image_unique_claims_distinct_names_and_leaves_no_temp_files() {
+        let dir = std::env::temp_dir().join(format!("rustshot_saveuniq_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let img = RgbaImage::from_pixel(3, 2, image::Rgba([1, 2, 3, 255]));
+        let name = "RustShot_2026-10-23_10-00-00.png";
+        let a = save_image_unique(&img, &dir, name, 90).unwrap();
+        let b = save_image_unique(&img, &dir, name, 90).unwrap();
+        assert_eq!(a, dir.join(name));
+        assert_eq!(b, dir.join("RustShot_2026-10-23_10-00-00_2.png"));
+        assert_eq!(
+            image::open(&b).unwrap().width(),
+            3,
+            "content written, not the placeholder"
+        );
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "no temp files left behind: {names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_image_replaces_atomically() {
+        let dir = std::env::temp_dir().join(format!("rustshot_atomic_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("out.png");
+        let img = RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 255]));
+        save_image(&img, &path, 90).unwrap();
+        save_image(
+            &RgbaImage::from_pixel(5, 1, image::Rgba([0, 0, 0, 255])),
+            &path,
+            90,
+        )
+        .unwrap();
+        assert_eq!(image::open(&path).unwrap().width(), 5);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn candidate_names_end_in_a_name_that_cannot_collide() {
+        let names: Vec<String> = candidate_names("a.png").collect();
+        assert_eq!(names[0], "a.png");
+        assert_eq!(names[1], "a_2.png");
+        assert_eq!(names.len(), 1 + 9_998 + 1);
+        let last = names.last().unwrap();
+        assert!(last.starts_with(&format!("a_{}-", std::process::id())) && last.ends_with(".png"));
     }
 
     #[test]

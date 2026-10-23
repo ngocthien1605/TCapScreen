@@ -138,8 +138,7 @@ fn run_capture(
 
     let ext = settings.screenshot.format.extension();
     let name = imaging::auto_name(imaging::Timestamp::now_local(), ext);
-    let path = imaging::unique_path(out_dir, &name);
-    imaging::save_image(&img, &path, settings.screenshot.jpeg_quality)?;
+    let path = imaging::save_image_unique(&img, out_dir, &name, settings.screenshot.jpeg_quality)?;
     tracing::info!("saved screenshot to {}", path.display());
 
     if settings.screenshot.copy_to_clipboard {

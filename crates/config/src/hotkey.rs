@@ -51,6 +51,60 @@ impl fmt::Display for HotkeyParseError {
 
 impl std::error::Error for HotkeyParseError {}
 
+/// Named main keys, in the W3C `KeyboardEvent.code` spelling the registration layer maps.
+/// Letters, digits and `F1`–`F24` are accepted besides these. Every entry must register on
+/// Windows (the app crate tests that each maps to a hotkey code).
+pub const NAMED_KEYS: &[&str] = &[
+    "PrintScreen",
+    "Escape",
+    "Enter",
+    "Space",
+    "Tab",
+    "Backspace",
+    "Delete",
+    "Insert",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Pause",
+    "ScrollLock",
+    "CapsLock",
+    "NumLock",
+    "ContextMenu",
+    "Minus",
+    "Equal",
+    "BracketLeft",
+    "BracketRight",
+    "Backslash",
+    "Semicolon",
+    "Quote",
+    "Backquote",
+    "Comma",
+    "Period",
+    "Slash",
+    "Numpad0",
+    "Numpad1",
+    "Numpad2",
+    "Numpad3",
+    "Numpad4",
+    "Numpad5",
+    "Numpad6",
+    "Numpad7",
+    "Numpad8",
+    "Numpad9",
+    "NumpadAdd",
+    "NumpadSubtract",
+    "NumpadMultiply",
+    "NumpadDivide",
+    "NumpadDecimal",
+    "NumpadEnter",
+];
+
 /// A hotkey: zero or more modifiers plus a single main key (e.g. `Ctrl+Shift+R`,
 /// `PrintScreen`). Modifiers are normalized (deduplicated and sorted) so that logically
 /// equal hotkeys compare equal regardless of how they were written.
@@ -72,43 +126,63 @@ impl Hotkey {
         }
     }
 
-    /// Canonicalize a main-key spelling so `printscreen`, `PrtSc`, `prt_scr` etc. unify.
+    /// Canonicalize a main-key spelling so `printscreen`, `PrtSc`, `prt_scr`, `arrowup`, `Up`
+    /// etc. unify. Known keys come out in their W3C `KeyboardEvent.code` spelling (what the
+    /// registration layer maps), single letters and digits upper-cased; anything else is
+    /// returned trimmed but otherwise unchanged, and [`Hotkey::is_known_key`] rejects it.
     pub fn normalize_key(raw: &str) -> String {
         let cleaned = raw.trim();
-        match cleaned
-            .to_ascii_lowercase()
-            .replace([' ', '_', '-'], "")
-            .as_str()
-        {
-            "printscreen" | "prtsc" | "prtscr" | "prtscn" | "print" => "PrintScreen".to_string(),
-            "esc" | "escape" => "Escape".to_string(),
-            "enter" | "return" => "Enter".to_string(),
-            "space" | "spacebar" => "Space".to_string(),
-            "del" | "delete" => "Delete".to_string(),
-            "ins" | "insert" => "Insert".to_string(),
-            "pgup" | "pageup" => "PageUp".to_string(),
-            "pgdn" | "pagedown" => "PageDown".to_string(),
-            // Single letters -> uppercase; function keys -> F<N>; otherwise title-case-ish.
-            other if other.len() == 1 => other.to_ascii_uppercase(),
-            other
-                if other.starts_with('f')
-                    && other[1..].chars().all(|c| c.is_ascii_digit())
-                    && other.len() > 1 =>
-            {
-                format!("F{}", &other[1..])
-            }
-            _ => {
-                // Title-case the first char, keep the rest as-is lowercased.
-                let mut chars = cleaned.chars();
-                match chars.next() {
-                    Some(first) => {
-                        first.to_ascii_uppercase().to_string()
-                            + &chars.as_str().to_ascii_lowercase()
-                    }
-                    None => String::new(),
-                }
+        let folded = cleaned.to_ascii_lowercase().replace([' ', '_', '-'], "");
+        let alias = match folded.as_str() {
+            "prtsc" | "prtscr" | "prtscn" | "print" | "snapshot" => Some("PrintScreen"),
+            "esc" => Some("Escape"),
+            "return" => Some("Enter"),
+            "spacebar" => Some("Space"),
+            "del" => Some("Delete"),
+            "ins" => Some("Insert"),
+            "pgup" => Some("PageUp"),
+            "pgdn" => Some("PageDown"),
+            "up" => Some("ArrowUp"),
+            "down" => Some("ArrowDown"),
+            "left" => Some("ArrowLeft"),
+            "right" => Some("ArrowRight"),
+            "bksp" | "back" => Some("Backspace"),
+            "caps" => Some("CapsLock"),
+            "scrlk" | "scroll" => Some("ScrollLock"),
+            "break" => Some("Pause"),
+            "menu" | "apps" | "application" => Some("ContextMenu"),
+            _ => None,
+        };
+        if let Some(a) = alias {
+            return a.to_string();
+        }
+        if folded.len() == 1 && folded.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return folded.to_ascii_uppercase();
+        }
+        if let Some(n) = folded.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
+            if (1..=24).contains(&n) && folded[1..] == n.to_string() {
+                return format!("F{n}");
             }
         }
+        NAMED_KEYS
+            .iter()
+            .find(|k| k.eq_ignore_ascii_case(&folded))
+            .map(|k| k.to_string())
+            .unwrap_or_else(|| cleaned.to_string())
+    }
+
+    /// True if `key` (already normalized) is a main key RustShot can register: a letter, a
+    /// digit, `F1`–`F24`, or one of [`NAMED_KEYS`].
+    pub fn is_known_key(key: &str) -> bool {
+        let single = key.len() == 1
+            && key
+                .chars()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase());
+        let fkey = key
+            .strip_prefix('F')
+            .and_then(|n| n.parse::<u8>().ok())
+            .is_some_and(|n| (1..=24).contains(&n) && key[1..] == n.to_string());
+        single || fkey || NAMED_KEYS.contains(&key)
     }
 
     /// True if this hotkey has no main key (unbound).
@@ -163,7 +237,17 @@ impl FromStr for Hotkey {
             }
         }
         match key {
-            Some(k) => Ok(Hotkey::new(mods, k)),
+            Some(k) => {
+                let hk = Hotkey::new(mods, k);
+                if Hotkey::is_known_key(&hk.key) {
+                    Ok(hk)
+                } else {
+                    Err(HotkeyParseError(format!(
+                        "{s} (unknown key \"{}\")",
+                        hk.key
+                    )))
+                }
+            }
             None => Err(HotkeyParseError(s.to_string())),
         }
     }
@@ -300,6 +384,41 @@ mod tests {
         let h: Hotkey = "".parse().unwrap();
         assert!(h.is_empty());
         assert_eq!(h.to_string(), "");
+    }
+
+    #[test]
+    fn multi_word_keys_keep_their_canonical_spelling() {
+        for (raw, want) in [
+            ("ArrowUp", "ArrowUp"),
+            ("arrowup", "ArrowUp"),
+            ("Up", "ArrowUp"),
+            ("capslock", "CapsLock"),
+            ("Caps Lock", "CapsLock"),
+            ("numpad_5", "Numpad5"),
+            ("pageup", "PageUp"),
+            ("f12", "F12"),
+            ("Menu", "ContextMenu"),
+        ] {
+            assert_eq!(Hotkey::normalize_key(raw), want, "{raw}");
+        }
+        let hk: Hotkey = "Ctrl+ArrowUp".parse().unwrap();
+        assert_eq!(hk.to_string(), "Ctrl+ArrowUp");
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected_not_silently_dead() {
+        for bad in [
+            "Ctrl+F99",
+            "Ctrl+F0",
+            "Alt+é",
+            "Ctrl+Frobnicate",
+            "Shift+F012",
+        ] {
+            assert!(bad.parse::<Hotkey>().is_err(), "{bad} should not parse");
+        }
+        assert!(Hotkey::is_known_key("Q") && Hotkey::is_known_key("7"));
+        assert!(Hotkey::is_known_key("F24") && !Hotkey::is_known_key("F25"));
+        assert!(!Hotkey::is_known_key("q"), "normalized keys are upper-case");
     }
 
     #[test]

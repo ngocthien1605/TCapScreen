@@ -108,8 +108,13 @@ Either click **Modify** next to a row and press the key combination you want (in
 `PrintScreen` and `Alt`/`Win` combos; Backspace clears it, Enter accepts, Esc cancels), or type
 a shortcut directly as `Modifier+…+Key` (for example `Ctrl+Shift+R`, or just `PrintScreen`);
 leave a field **blank** to turn that hotkey off. Supported modifiers are `Ctrl`, `Alt`, `Shift`, and
-`Win`; keys include letters, digits, `F1`–`F24`, and `PrintScreen`, `Space`, `Tab`, `Delete`,
-`Insert`, `Home`, `End`, `PageUp`, `PageDown`. **Restore default hotkeys** resets all six to the
+`Win`; keys include letters, digits, `F1`–`F24`, `PrintScreen`, `Space`, `Tab`, `Enter`,
+`Escape`, `Backspace`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, the arrow keys
+(`ArrowUp` or just `Up`, …), `Pause`, `ScrollLock`, `CapsLock`, `NumLock`, `ContextMenu`, the
+numeric keypad (`Numpad0`–`Numpad9`, `NumpadAdd`, …) and punctuation keys by their US-layout
+name (`Minus`, `Equal`, `Comma`, `Period`, `Slash`, `Semicolon`, `Quote`, `Backquote`,
+`BracketLeft`, `BracketRight`, `Backslash`). A name RustShot does not know is refused on **OK**
+rather than saved as a shortcut that would never fire. **Restore default hotkeys** resets all six to the
 table above. On **OK**, an invalid shortcut or two actions sharing the same combination are
 reported and the dialog stays open so you can fix them.
 
@@ -178,4 +183,5 @@ from a newer build still loads in an older one.
   it could get, and then shows a dialog listing what is missing and why. A microphone named in
   `microphone_device` that is not connected falls back to the default microphone. Otherwise,
   check the microphone and system-audio toggles in Settings.
-- **Logs:** `%APPDATA%\RustShot\logs\rustshot.log.<date>` has details for any failure.
+- **Logs:** `%APPDATA%\RustShot\logs\rustshot.log.<date>` has details for any failure; the newest
+  14 days are kept.

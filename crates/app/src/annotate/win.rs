@@ -762,8 +762,9 @@ pub fn render(img: &Rgba, items: &[Item]) -> Result<Rgba> {
     Rgba::from_raw(w, h, out).ok_or_else(|| anyhow!("rendered buffer had the wrong size"))
 }
 
-/// `<stem>_annotated.<ext>` next to the original, never overwriting an existing file.
-fn annotated_path(source: &Path) -> PathBuf {
+/// Where an annotated copy goes: the original's folder and `<stem>_annotated.<ext>`, which
+/// `save_image_unique` numbers (`_annotated_2`, …) rather than overwrite.
+fn annotated_target(source: &Path) -> (PathBuf, String) {
     let dir = source.parent().unwrap_or_else(|| Path::new("."));
     let stem = source
         .file_stem()
@@ -773,7 +774,7 @@ fn annotated_path(source: &Path) -> PathBuf {
         .extension()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "png".into());
-    imaging::unique_path(dir, &format!("{stem}_annotated.{ext}"))
+    (dir.to_path_buf(), format!("{stem}_annotated.{ext}"))
 }
 
 fn set_status(hwnd: HWND, ctx: &Ctx, status: &str) {
@@ -799,10 +800,8 @@ fn save(hwnd: HWND, ctx: &mut Ctx) {
     }
     let quality = crate::dispatch::with_app(|a| a.settings.screenshot.jpeg_quality).unwrap_or(90);
     let result = render(&ctx.image, ctx.editor.items()).and_then(|img| {
-        let path = annotated_path(&ctx.source);
-        imaging::save_image(&img, &path, quality)
-            .map(|_| path)
-            .map_err(|e| anyhow!("{e}"))
+        let (dir, name) = annotated_target(&ctx.source);
+        imaging::save_image_unique(&img, &dir, &name, quality).map_err(|e| anyhow!("{e}"))
     });
     match result {
         Ok(path) => {
@@ -978,16 +977,20 @@ mod tests {
     }
 
     #[test]
-    fn annotated_path_sits_next_to_the_original_and_never_overwrites() {
+    fn annotated_copy_sits_next_to_the_original_and_never_overwrites() {
         let dir = std::env::temp_dir().join(format!("rustshot-annot-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
         let src = dir.join("shot.png");
-        let first = annotated_path(&src);
+        let (tdir, name) = annotated_target(&src);
+        assert_eq!(
+            (tdir.as_path(), name.as_str()),
+            (dir.as_path(), "shot_annotated.png")
+        );
+        let img = white(4, 4);
+        let first = imaging::save_image_unique(&img, &tdir, &name, 90).unwrap();
+        let second = imaging::save_image_unique(&img, &tdir, &name, 90).unwrap();
         assert_eq!(first, dir.join("shot_annotated.png"));
-        std::fs::write(&first, b"x").unwrap();
-        let second = annotated_path(&src);
-        assert_ne!(second, first, "must not reuse an existing file name");
-        assert_eq!(second.parent(), Some(dir.as_path()));
+        assert_eq!(second, dir.join("shot_annotated_2.png"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
