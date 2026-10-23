@@ -193,6 +193,13 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Review item (5) — CI and releases. `rust-toolchain.toml` pinned to `1.98.1`
+  (was `stable`); CI installs the toolchain named there (composite action
+  `.github/actions/setup-rust`), adds `cargo deny check` (cargo-deny 0.20.2, same as local),
+  `--locked` builds, the portable zip as a workflow artifact, and an `msrv` job checking with
+  `rust-version` 1.90 (passes locally with 1.90.0). New `release.yml`: on a `v*` tag (or run by
+  hand for an existing tag) re-runs the gate, checks tag = version, builds the zip + `.sha256`,
+  and publishes the GitHub release with the tag message as notes.
 - 2026-10-23: Review item (4) — audio. Each source is set up on its own (a failing mic no longer
   discards system audio); `microphone_device` is honoured (id / name / partial name, falling
   back to the default with a note); PCM 8/24/32-bit and float64 decode (were silent), channel

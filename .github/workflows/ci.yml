@@ -5,23 +5,66 @@ on:
     branches: [main, master]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust (stable, MSVC)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rust
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
       - name: Unit tests
         run: cargo test --workspace
+      - name: Dependency policy (cargo-deny)
+        run: cargo deny check
+      # The same script the release workflow publishes with, so packaging is exercised on
+      # every push rather than only when a tag is cut.
+      - name: Package (portable zip)
+        shell: pwsh
+        run: pwsh -File scripts/build-portable.ps1
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustshot-portable
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # The workspace promises `rust-version` in Cargo.toml; prove it still builds with that compiler.
+  msrv:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the minimum supported Rust
+        shell: pwsh
+        run: |
+          $m = Select-String -Path Cargo.toml -Pattern '^\s*rust-version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $m) { throw 'Cargo.toml has no rust-version' }
+          $msrv = $m.Matches.Groups[1].Value
+          rustup toolchain install $msrv --no-self-update --profile minimal -t x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "rustup failed to install $msrv" }
+          # RUSTUP_TOOLCHAIN outranks rust-toolchain.toml for every later cargo/rustc call.
+          "RUSTUP_TOOLCHAIN=$msrv" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - name: Check (MSRV)
+        run: cargo check --workspace --all-targets --locked

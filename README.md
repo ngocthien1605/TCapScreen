@@ -44,7 +44,8 @@ screenshot tool holding `PrintScreen`), RustShot degrades gracefully and logs a 
 
 - Windows 10 1903+ / Windows 11 (x64). Uses Windows Graphics Capture, Direct3D 11, Media
   Foundation, and WASAPI.
-- To **build**: Rust 1.90+ with the `x86_64-pc-windows-msvc` toolchain, and the MSVC build tools
+- To **build**: Rust 1.90+ (the repo pins 1.98.1 in `rust-toolchain.toml`; rustup picks it up)
+  with the `x86_64-pc-windows-msvc` toolchain, and the MSVC build tools
   (Visual Studio 2022 + Windows SDK).
 
 ## Build & run
@@ -60,12 +61,13 @@ cargo build --release
 
 ### Quality gate
 
-Every change must pass the same checks CI runs:
+Every change must pass the same checks CI runs (CI also runs `cargo deny check`, builds the
+portable zip, and checks the workspace still compiles with Rust 1.90):
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace
+cargo build --workspace --locked
 cargo test --workspace
 ```
 

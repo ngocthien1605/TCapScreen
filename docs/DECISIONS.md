@@ -6,8 +6,21 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 
 - **Clean-room.** No Screenpresso code, resources, icons, strings, or layouts are copied. We
   reproduce *capabilities* only, using the RE analysis as architecture/UX inspiration.
-- **Toolchain pinned via `rust-toolchain.toml`** (stable, MSVC, x64). Verified on this box:
-  Rust 1.98.1, VS2022 BuildTools MSVC 14.44, Windows SDK 10.0.26100. Builds + links + runs.
+- **Toolchain pinned to an exact release in `rust-toolchain.toml`** (`1.98.1`, MSVC, x64), not
+  `stable`. The gate runs `clippy -D warnings`, so a new stable with new lints would turn CI red
+  on unchanged code, and a release would be built by whatever compiler shipped that week. CI
+  and the release workflow install the toolchain *named in that file* (one source of truth);
+  bumping it is a deliberate one-line change that gets its own gate run. Separately, an `msrv`
+  CI job checks the workspace with `rust-version` (1.90) so that promise stays true (verified
+  locally with 1.90.0). Verified on this box: Rust 1.98.1, VS2022 BuildTools MSVC 14.44,
+  Windows SDK 10.0.26100.
+- **Releases are built by CI, not by hand** (`.github/workflows/release.yml`). Pushing a `v*`
+  tag re-runs the whole gate (a tag push gets no CI run of its own), checks the tag equals the
+  workspace version, runs `scripts/build-portable.ps1` (the same script CI runs on every push,
+  so packaging is exercised continuously), writes a `sha256sum`-format checksum, and publishes
+  both files to a GitHub release whose notes are the annotated tag's message. A release that
+  already exists (made by hand) keeps its notes and gets its assets replaced. The MSI is not
+  built there: WiX v3 isn't guaranteed on `windows-latest`.
 - **Crate versions verified against crates.io on 2026-10-22** and centralised in the workspace
   `Cargo.toml`. Notables vs the prompt's indicative versions: `windows` 0.62.2 (not 0.58),
   `windows-capture` 2.0.1 (not ~1.5), `tray-icon` 0.26, `global-hotkey` 0.9, `eframe` 0.37.

@@ -14,6 +14,32 @@ and `LICENSE`. Unzip anywhere and run `rustshot.exe` — no installation, no adm
 user enables "Run at startup", the registry entry points at the exe's current location, so keep
 the folder stable (or re-toggle the setting after moving it).
 
+## Cutting a release
+
+Releases are built and published by GitHub Actions (`.github/workflows/release.yml`):
+
+1. Bump `version` in the workspace `Cargo.toml` (`[workspace.package]`), run `cargo update -w`
+   so `Cargo.lock` follows, and commit.
+2. Create an **annotated** tag whose message is the release notes, and push it:
+
+   ```sh
+   git tag -a v0.1.5 -m "RustShot v0.1.5 ..."
+   git push origin master v0.1.5
+   ```
+
+3. The workflow re-runs the gate (fmt, clippy, tests, cargo-deny), fails unless the tag equals
+   `v<workspace version>`, builds the portable zip with `scripts/build-portable.ps1`, writes
+   `RustShot-<version>-portable-x64.zip.sha256` (`sha256sum -c` format), and creates the GitHub
+   release with both files, titled `RustShot v<version>`, with the tag message as its notes.
+
+To (re)attach the zip to a tag that already exists — e.g. one released by hand before this
+workflow existed — run it from **Actions → Release → Run workflow** with that tag. If the release
+already exists, its notes are kept and its assets replaced.
+
+CI (`ci.yml`) builds the same zip on every push to `master` and keeps it for 14 days as the
+`rustshot-portable` workflow artifact, so the packaging step is tested before a tag needs it.
+The MSI is not built by CI (WiX v3 is not guaranteed on the `windows-latest` image).
+
 ## MSI installer (WiX + cargo-wix)
 
 Requires the [WiX Toolset v3](https://wixtoolset.org/) and cargo-wix:

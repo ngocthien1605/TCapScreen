@@ -1,0 +1,16 @@
+name: Set up the pinned Rust toolchain
+description: Install the toolchain named in rust-toolchain.toml (the single source of truth).
+runs:
+  using: composite
+  steps:
+    - name: Install toolchain from rust-toolchain.toml
+      shell: pwsh
+      run: |
+        $m = Select-String -Path rust-toolchain.toml -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if (-not $m) { throw 'rust-toolchain.toml has no channel' }
+        $ch = $m.Matches.Groups[1].Value
+        rustup toolchain install $ch --no-self-update --profile minimal -c rustfmt,clippy -t x86_64-pc-windows-msvc
+        if ($LASTEXITCODE -ne 0) { throw "rustup failed to install $ch" }
+        rustup default $ch
+        rustc --version
+        cargo --version

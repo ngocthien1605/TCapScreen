@@ -15,7 +15,7 @@ if (-not $version) { $version = '0.0.0' }
 Write-Host "Building RustShot $version (release)…"
 Push-Location $root
 try {
-    cargo build --release
+    cargo build --release --locked
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
     $stage = Join-Path $root "target\portable\RustShot"
