@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use windows::core::IInspectable;
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{
-    Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
+    Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
 };
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Graphics::SizeInt32;
@@ -66,6 +66,8 @@ pub struct CaptureStream {
     /// The captured window (as an integer handle) when the target is a window, for the health
     /// poll: WGC does not reliably raise `Closed` for a destroyed window.
     window: Option<isize>,
+    /// Copies (and throttles) frames; shared with the frame callback.
+    deliver: Arc<Deliver>,
 }
 
 /// Tracks consecutive copy failures so the stream can log sparsely and give up once.
@@ -106,6 +108,129 @@ impl FailureTracker {
             FailureAction::Log
         } else {
             FailureAction::Quiet
+        }
+    }
+}
+
+/// Copies captured frames to the CPU and sends them, at most once per `min_interval`.
+struct Deliver {
+    d3d: Arc<Mutex<D3dDevice>>,
+    tx: Sender<StreamEvent>,
+    crop: Option<Rect>,
+    failures: FailureTracker,
+    start: Instant,
+    /// Zero = copy every frame.
+    min_interval: Duration,
+    /// Held under one lock for the whole decide-and-copy, so frames are sent in order.
+    state: Mutex<Throttle>,
+}
+
+#[derive(Default)]
+struct Throttle {
+    last_copy: Option<Instant>,
+    /// The newest frame not yet copied (returned to the pool when replaced or copied).
+    held: Option<Direct3D11CaptureFrame>,
+}
+
+impl Throttle {
+    fn due(&self, now: Instant, min_interval: Duration) -> bool {
+        is_due(self.last_copy, now, min_interval)
+    }
+
+    fn release_held(&mut self) {
+        if let Some(f) = self.held.take() {
+            let _ = f.Close();
+        }
+    }
+}
+
+/// Whether a copy may happen at `now`, given the last one.
+fn is_due(last_copy: Option<Instant>, now: Instant, min_interval: Duration) -> bool {
+    last_copy.is_none_or(|t| now.saturating_duration_since(t) >= min_interval)
+}
+
+impl Deliver {
+    /// A frame arrived: copy it if due, else hold it in place of any older held frame.
+    fn arrive(&self, frame: Direct3D11CaptureFrame) {
+        let Ok(mut st) = self.state.lock() else {
+            let _ = frame.Close();
+            return;
+        };
+        let now = Instant::now();
+        st.release_held();
+        if st.due(now, self.min_interval) {
+            st.last_copy = Some(now);
+            self.copy(&frame);
+            let _ = frame.Close();
+        } else {
+            st.held = Some(frame);
+        }
+    }
+
+    /// Copy `frame` now regardless of the interval, dropping any held (older) frame.
+    fn deliver_now(&self, frame: Direct3D11CaptureFrame) {
+        if let Ok(mut st) = self.state.lock() {
+            st.release_held();
+            st.last_copy = Some(Instant::now());
+            self.copy(&frame);
+        }
+        let _ = frame.Close();
+    }
+
+    /// Copy the held frame if it is due.
+    fn pump(&self) {
+        let Ok(mut st) = self.state.lock() else {
+            return;
+        };
+        let now = Instant::now();
+        if st.held.is_some() && st.due(now, self.min_interval) {
+            if let Some(frame) = st.held.take() {
+                st.last_copy = Some(now);
+                self.copy(&frame);
+                let _ = frame.Close();
+            }
+        }
+    }
+
+    fn discard_held(&self) {
+        if let Ok(mut st) = self.state.lock() {
+            st.release_held();
+        }
+    }
+
+    /// Read `frame` back to the CPU, crop it, and send it; count and report failures.
+    fn copy(&self, frame: &Direct3D11CaptureFrame) {
+        let Ok(guard) = self.d3d.lock() else {
+            return;
+        };
+        let ts = self.start.elapsed();
+        match crate::win::wgc::frame_to_cpu(&guard, frame, ts) {
+            Ok(cpu) => {
+                self.failures.record_success();
+                let out = match self.crop {
+                    Some(r) => cpu.crop(r),
+                    None => cpu,
+                };
+                let _ = self.tx.send(StreamEvent::Frame(out));
+            }
+            Err(e) => {
+                let dead = guard.removed_reason();
+                match self.failures.record_failure(dead.is_some()) {
+                    FailureAction::Log => tracing::warn!("capture frame copy failed: {e}"),
+                    FailureAction::Quiet => {}
+                    FailureAction::GiveUp => {
+                        let err = match dead {
+                            Some(r) => CaptureError::DeviceLost(r),
+                            None => CaptureError::Platform(format!(
+                                "capture frame copy keeps failing \
+                                 ({MAX_CONSECUTIVE_FAILURES}x): {e}"
+                            )),
+                        };
+                        tracing::error!("{err}; stopping the stream");
+                        let _ = self.tx.send(StreamEvent::Error(err));
+                    }
+                }
+            }
         }
     }
 }
@@ -158,10 +283,17 @@ fn resolve(target: &CaptureTarget) -> Result<(GraphicsCaptureItem, Option<Rect>,
 }
 
 impl CaptureStream {
-    /// Start capturing `target`, sending each frame to `tx`. The session runs until [`stop`].
+    /// Start capturing `target`, sending frames to `tx`. The session runs until [`stop`].
+    ///
+    /// `max_fps` bounds the GPU→CPU copies: WGC delivers at the display's refresh rate (144 Hz
+    /// on some monitors) while a recording needs at most its own frame rate, and each copy is a
+    /// full-surface read-back. Frames arriving sooner than `1 / max_fps` after the last copy are
+    /// held, not copied; the newest held frame is copied once due, by the next arrival or by
+    /// [`pump`](Self::pump). `0` copies every frame.
     pub fn start(
         target: &CaptureTarget,
         include_cursor: bool,
+        max_fps: u32,
         tx: Sender<StreamEvent>,
     ) -> Result<Self> {
         let (item, crop, window) = resolve(target)?;
@@ -186,14 +318,25 @@ impl CaptureStream {
 
         let start = Instant::now();
         let pool_size = Arc::new(AtomicU64::new(pack_size(size)));
-        let failures = Arc::new(FailureTracker::default());
+        let deliver = Arc::new(Deliver {
+            d3d: d3d.clone(),
+            tx: tx.clone(),
+            crop,
+            failures: FailureTracker::default(),
+            start,
+            min_interval: if max_fps == 0 {
+                Duration::ZERO
+            } else {
+                Duration::from_nanos(1_000_000_000 / max_fps as u64)
+            },
+            state: Mutex::new(Throttle::default()),
+        });
 
-        // FrameArrived: copy the surface to CPU, crop, and send. Runs on pool threads.
-        let d3d_cb = d3d.clone();
-        let tx_cb = tx.clone();
+        // FrameArrived: copy the surface to CPU (or hold it, see `Deliver`), crop, and send.
+        // Runs on pool threads.
+        let deliver_cb = deliver.clone();
         let pool_cb = pool.clone();
         let size_cb = pool_size.clone();
-        let failures_cb = failures.clone();
         let handler =
             TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |_, _| {
                 // This runs on a WGC pool thread inside a COM callback: a panic here would
@@ -203,67 +346,39 @@ impl CaptureStream {
                     let Ok(frame) = pool_cb.TryGetNextFrame() else {
                         return;
                     };
-                    let Ok(guard) = d3d_cb.lock() else {
-                        let _ = frame.Close();
-                        return;
-                    };
-                    let ts = start.elapsed();
-                    match crate::win::wgc::frame_to_cpu(&guard, &frame, ts) {
-                        Ok(cpu) => {
-                            failures_cb.record_success();
-                            let out = match crop {
-                                Some(r) => cpu.crop(r),
-                                None => cpu,
-                            };
-                            let _ = tx_cb.send(StreamEvent::Frame(out));
-                        }
-                        Err(e) => {
-                            let dead = guard.removed_reason();
-                            match failures_cb.record_failure(dead.is_some()) {
-                                FailureAction::Log => {
-                                    tracing::warn!("capture frame copy failed: {e}")
-                                }
-                                FailureAction::Quiet => {}
-                                FailureAction::GiveUp => {
-                                    let err = match dead {
-                                        Some(r) => CaptureError::DeviceLost(r),
-                                        None => CaptureError::Platform(format!(
-                                            "capture frame copy keeps failing \
-                                             ({MAX_CONSECUTIVE_FAILURES}x): {e}"
-                                        )),
-                                    };
-                                    tracing::error!("{err}; stopping the stream");
-                                    let _ = tx_cb.send(StreamEvent::Error(err));
-                                }
-                            }
-                        }
-                    }
                     // Resize: the pool's surfaces keep their original size, so a window that
                     // grew would be clipped and one that shrank would carry stale margins. The
                     // documented pattern is to recreate the pool after handling the frame.
                     let content = frame.ContentSize().unwrap_or(SizeInt32::default());
-                    let _ = frame.Close();
-                    if content.Width > 0
+                    let resized = content.Width > 0
                         && content.Height > 0
-                        && pack_size(content) != size_cb.load(Ordering::Relaxed)
-                    {
-                        // The WinRT device projection is not `Send`, so it is re-derived here
-                        // from the (shared) D3D device rather than captured by the closure.
-                        match guard.winrt_device().and_then(|dev| {
-                            pool_cb
-                                .Recreate(&dev, FORMAT, BUFFERS, content)
-                                .map_err(map_com)
-                        }) {
-                            Ok(()) => {
-                                size_cb.store(pack_size(content), Ordering::Relaxed);
-                                tracing::info!(
-                                    "capture source resized; frame pool recreated at {}x{}",
-                                    content.Width,
-                                    content.Height
-                                );
-                            }
-                            Err(e) => tracing::warn!("frame pool recreate failed: {e}"),
+                        && pack_size(content) != size_cb.load(Ordering::Relaxed);
+                    if !resized {
+                        deliver_cb.arrive(frame);
+                        return;
+                    }
+                    // Deliver this frame now and drop any held one: nothing from the old pool
+                    // may stay outstanding across the recreate.
+                    deliver_cb.deliver_now(frame);
+                    let Ok(guard) = deliver_cb.d3d.lock() else {
+                        return;
+                    };
+                    // The WinRT device projection is not `Send`, so it is re-derived here
+                    // from the (shared) D3D device rather than captured by the closure.
+                    match guard.winrt_device().and_then(|dev| {
+                        pool_cb
+                            .Recreate(&dev, FORMAT, BUFFERS, content)
+                            .map_err(map_com)
+                    }) {
+                        Ok(()) => {
+                            size_cb.store(pack_size(content), Ordering::Relaxed);
+                            tracing::info!(
+                                "capture source resized; frame pool recreated at {}x{}",
+                                content.Width,
+                                content.Height
+                            );
                         }
+                        Err(e) => tracing::warn!("frame pool recreate failed: {e}"),
                     }
                 };
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).is_err() {
@@ -280,9 +395,22 @@ impl CaptureStream {
                 let _ = tx_closed.send(StreamEvent::Closed);
                 Ok(())
             });
-        let closed_token = item.Closed(&closed_handler).map_err(map_com)?;
-
-        session.StartCapture().map_err(map_com)?;
+        // From here on a failure must unregister the frame handler (it holds the pool, so the
+        // two would keep each other alive) and close what was opened.
+        let started = item.Closed(&closed_handler).and_then(|token| {
+            session.StartCapture().map(|()| token).inspect_err(|_| {
+                let _ = item.RemoveClosed(token);
+            })
+        });
+        let closed_token = match started {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = pool.RemoveFrameArrived(frame_token);
+                let _ = session.Close();
+                let _ = pool.Close();
+                return Err(map_com(e));
+            }
+        };
 
         Ok(Self {
             session,
@@ -294,7 +422,15 @@ impl CaptureStream {
             start,
             pool_size,
             window,
+            deliver,
         })
+    }
+
+    /// Deliver a frame the stream is holding back (see `max_fps` on [`start`](Self::start))
+    /// once it is due. A throttled consumer must call this every tick: on a static screen WGC
+    /// sends no further frames, so the last change would otherwise never be delivered.
+    pub fn pump(&self) {
+        self.deliver.pump();
     }
 
     /// How long the stream has been running.
@@ -331,6 +467,7 @@ impl CaptureStream {
     /// Stop the session and release all callbacks and COM resources.
     pub fn stop(self) {
         let _ = self.pool.RemoveFrameArrived(self.frame_token);
+        self.deliver.discard_held();
         let _ = self.item.RemoveClosed(self.closed_token);
         let _ = self.session.Close();
         let _ = self.pool.Close();
@@ -376,6 +513,19 @@ mod tests {
         let t = FailureTracker::default();
         assert_eq!(t.record_failure(true), FailureAction::GiveUp);
         assert_eq!(t.record_failure(true), FailureAction::Quiet);
+    }
+
+    #[test]
+    fn copies_are_spaced_by_the_minimum_interval() {
+        let t0 = Instant::now();
+        let iv = Duration::from_millis(33);
+        assert!(is_due(None, t0, iv), "the first frame is always copied");
+        assert!(!is_due(Some(t0), t0 + Duration::from_millis(16), iv));
+        assert!(is_due(Some(t0), t0 + iv, iv));
+        assert!(
+            is_due(Some(t0), t0, Duration::ZERO),
+            "no throttle when unlimited"
+        );
     }
 
     #[test]

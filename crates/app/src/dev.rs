@@ -460,8 +460,15 @@ fn cmd_record_gif(index: usize, seconds: u64, out: PathBuf) -> ExitCode {
     std::thread::sleep(std::time::Duration::from_secs(seconds));
     match handle.stop() {
         Ok(p) => match imaging::probe_gif(&p) {
-            Ok((w, h, frames)) => {
-                println!("saved {} — {}x{}, {} frames", p.display(), w, h, frames);
+            Ok(info) => {
+                println!(
+                    "saved {} — {}x{}, {} frames, plays {:.2}s",
+                    p.display(),
+                    info.width,
+                    info.height,
+                    info.frames,
+                    info.duration.as_secs_f64()
+                );
                 ExitCode::SUCCESS
             }
             Err(e) => {

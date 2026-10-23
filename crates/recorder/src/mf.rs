@@ -19,10 +19,10 @@ use windows::Win32::Media::MediaFoundation::{
     MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_DISABLE_THROTTLING,
 };
 
+use crate::clock::frame_time_100ns;
 use crate::RecorderError;
 
 /// 100-ns ticks per second (Media Foundation time base).
-const HNS_PER_SEC: i64 = 10_000_000;
 /// `MF_VERSION` = (MF_SDK_VERSION << 16) | MF_API_VERSION.
 const MF_VERSION: u32 = 0x0002_0070;
 
@@ -54,7 +54,7 @@ pub struct VideoSink {
     audio_index: Option<u32>,
     width: u32,
     height: u32,
-    frame_dur: i64,
+    fps: u32,
 }
 
 impl VideoSink {
@@ -76,7 +76,6 @@ impl VideoSink {
         });
 
         let fps = fps.max(1);
-        let frame_dur = HNS_PER_SEC / fps as i64;
 
         // SAFETY: standard SinkWriter setup; all COM calls are checked.
         unsafe {
@@ -195,7 +194,7 @@ impl VideoSink {
                 audio_index,
                 width,
                 height,
-                frame_dur,
+                fps,
             })
         }
     }
@@ -230,16 +229,13 @@ impl VideoSink {
         Ok(())
     }
 
-    /// The per-frame duration in 100-ns units.
-    pub fn frame_duration(&self) -> i64 {
-        self.frame_dur
-    }
-
-    /// Write one frame at `time_100ns`. The frame is copied (BGRA, tightly packed) into an MF
+    /// Write frame number `index` (timed at `index / fps`). The frame is copied (BGRA, tightly packed) into an MF
     /// buffer, cropped to the sink's dimensions; a smaller frame (the source window shrank
     /// mid-recording) is padded with black. The sink's size is fixed at creation, so a source
     /// that grew is cropped to the original size rather than restarting the encoder.
-    pub fn write_frame(&self, frame: &Frame, time_100ns: i64) -> Result<(), RecorderError> {
+    pub fn write_frame(&self, frame: &Frame, index: i64) -> Result<(), RecorderError> {
+        let time_100ns = frame_time_100ns(index, self.fps);
+        let duration = frame_time_100ns(index + 1, self.fps) - time_100ns;
         let w = self.width as usize;
         let h = self.height as usize;
         let size = (w * h * 4) as u32;
@@ -267,7 +263,7 @@ impl VideoSink {
             let sample = MFCreateSample().map_err(mf)?;
             sample.AddBuffer(&buffer).map_err(mf)?;
             sample.SetSampleTime(time_100ns).map_err(mf)?;
-            sample.SetSampleDuration(self.frame_dur).map_err(mf)?;
+            sample.SetSampleDuration(duration).map_err(mf)?;
             self.writer
                 .WriteSample(self.stream_index, &sample)
                 .map_err(mf)?;

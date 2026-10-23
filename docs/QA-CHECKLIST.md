@@ -97,7 +97,11 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 
 ## M5 — GIF
 - [ ] Short region recording exports an optimised GIF that opens in a browser.
-- [ ] Dimension/length caps enforced with a clear warning.
+- [ ] Dimension/length caps enforced with a clear warning. *(Length cap now ends the recording
+      with the notice "it reached the N-second limit for GIF recordings"; code path unit-free,
+      not yet seen live.)*
+- [x] GIF playback length matches the time recorded: `dev record-gif 0 6` → 5.73 s of playback
+      from 6.0 s wall (first frame ~0.3 s in), 19 distinct frames over 86 slots.
 
 ## M6/M7
 - [ ] Settings UI edits persist and take effect.

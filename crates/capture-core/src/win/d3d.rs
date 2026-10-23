@@ -1,5 +1,6 @@
 //! Direct3D11 device creation and GPU-texture → CPU `Frame` copy.
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use windows::core::Interface;
@@ -23,10 +24,16 @@ pub fn map_com(e: windows::core::Error) -> CaptureError {
     CaptureError::Platform(format!("{e}"))
 }
 
+/// What a cached staging texture must match to be reused: width, height, DXGI format.
+type StagingKey = (u32, u32, i32);
+
 /// A D3D11 device + immediate context used for capture.
 pub struct D3dDevice {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
+    /// The CPU-readable staging texture from the last read-back, reused while the surface keeps
+    /// the same size and format (a stream copies every frame; creating one per frame is waste).
+    staging: Mutex<Option<(ID3D11Texture2D, StagingKey)>>,
 }
 
 impl std::fmt::Debug for D3dDevice {
@@ -61,7 +68,11 @@ impl D3dDevice {
             match res {
                 Ok(()) => {
                     if let (Some(device), Some(context)) = (device, context) {
-                        return Ok(Self { device, context });
+                        return Ok(Self {
+                            device,
+                            context,
+                            staging: Mutex::new(None),
+                        });
                     }
                 }
                 Err(e) => last = Some(e),
@@ -109,11 +120,25 @@ impl D3dDevice {
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
         desc.MiscFlags = 0;
 
-        let mut staging: Option<ID3D11Texture2D> = None;
-        // SAFETY: valid desc; no initial data; writes the new texture into `staging`.
-        unsafe { self.device.CreateTexture2D(&desc, None, Some(&mut staging)) }.map_err(map_com)?;
-        let staging = staging
-            .ok_or_else(|| CaptureError::Platform("CreateTexture2D returned null".into()))?;
+        let key = (desc.Width, desc.Height, desc.Format.0);
+        let mut cache = self
+            .staging
+            .lock()
+            .map_err(|_| CaptureError::Platform("staging cache poisoned".into()))?;
+        let staging = match cache.as_ref() {
+            Some((tex, k)) if *k == key => tex.clone(),
+            _ => {
+                let mut created: Option<ID3D11Texture2D> = None;
+                // SAFETY: valid desc; no initial data; writes the new texture into `created`.
+                unsafe { self.device.CreateTexture2D(&desc, None, Some(&mut created)) }
+                    .map_err(map_com)?;
+                let tex = created.ok_or_else(|| {
+                    CaptureError::Platform("CreateTexture2D returned null".into())
+                })?;
+                *cache = Some((tex.clone(), key));
+                tex
+            }
+        };
 
         // SAFETY: both resources are valid and compatible (same desc minus usage/cpu flags).
         unsafe { self.context.CopyResource(&staging, texture) };
@@ -132,18 +157,13 @@ impl D3dDevice {
         let height = content_h.min(surface_h);
         let byte_len = stride.saturating_mul(surface_h as usize);
 
-        let mut data = vec![0u8; byte_len];
-        if !mapped.pData.is_null() && byte_len > 0 {
-            // SAFETY: the mapped region is at least `RowPitch * Height` bytes; we copy exactly
-            // that many into an equally-sized Vec.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    mapped.pData as *const u8,
-                    data.as_mut_ptr(),
-                    byte_len,
-                );
-            }
-        }
+        let data = if !mapped.pData.is_null() && byte_len > 0 {
+            // SAFETY: the mapped region is at least `RowPitch * Height` bytes and stays mapped
+            // until the Unmap below; it is copied out before then.
+            unsafe { std::slice::from_raw_parts(mapped.pData as *const u8, byte_len) }.to_vec()
+        } else {
+            vec![0u8; byte_len]
+        };
         // SAFETY: balances the Map above on the same resource/subresource.
         unsafe { self.context.Unmap(&staging, 0) };
 

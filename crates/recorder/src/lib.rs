@@ -14,6 +14,8 @@ use thiserror::Error;
 
 #[cfg(windows)]
 mod audio;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod clock;
 #[cfg(windows)]
 mod gif;
 #[cfg(windows)]

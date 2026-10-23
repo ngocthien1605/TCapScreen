@@ -11,6 +11,7 @@ use capture_core::{CaptureStream, Frame, StreamEvent};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 use crate::audio::{AudioEngine, AudioRequest};
+use crate::clock::FrameClock;
 use crate::mf::VideoSink;
 use crate::{Notes, RecordCfg, RecordOutput, RecorderError, Result};
 
@@ -109,7 +110,7 @@ fn encode_loop(
     });
 
     let (tx, rx) = mpsc::channel::<StreamEvent>();
-    let stream = CaptureStream::start(&cfg.target, cursor, tx).map_err(cap_err)?;
+    let stream = CaptureStream::start(&cfg.target, cursor, fps, tx).map_err(cap_err)?;
 
     // Wait for the first frame to learn the real (content) size.
     let first = match wait_first(&rx) {
@@ -145,8 +146,7 @@ fn encode_loop(
             return Err(e);
         }
     };
-    let frame_dur = sink.frame_duration();
-    let tick = Duration::from_nanos((frame_dur as u64) * 100);
+    let tick = Duration::from_nanos(1_000_000_000 / fps.max(1) as u64);
 
     let mut latest = first;
     let mut idx: i64 = 0;
@@ -158,14 +158,10 @@ fn encode_loop(
     // Audio uses a sample-count clock (can't drift against the video index clock).
     let mut audio_frames: i64 = 0;
 
-    // CFR driven by the monotonic clock: the number of frames that should exist by now is
-    // `active_elapsed / frame_dur`. We re-emit the latest frame to catch up, so the output's
-    // duration tracks real (unpaused) wall-clock time rather than drifting with sleep latency.
-    let start = Instant::now();
-    let mut paused_accum = Duration::ZERO;
-    let mut pause_started: Option<Instant> = None;
-    let mut was_paused = false;
-    let tick_nanos = tick.as_nanos().max(1);
+    // CFR driven by the monotonic clock (see `clock`): we re-emit the latest frame to catch up,
+    // so the output's duration tracks real (unpaused) wall-clock time rather than drifting with
+    // sleep latency.
+    let mut clock = FrameClock::new(fps, Instant::now());
     let max_catch_up = (fps as i64).max(1) * 2;
 
     // Drop audio captured during video startup so both timelines begin at t = 0 (A/V sync).
@@ -187,16 +183,10 @@ fn encode_loop(
                 }
             }
             let is_paused = paused.load(Ordering::SeqCst);
-            // Accumulate whole pause spans at their edges so `active` time is exact.
-            if is_paused && !was_paused {
-                pause_started = Some(now);
-            } else if !is_paused && was_paused {
-                if let Some(ps) = pause_started.take() {
-                    paused_accum += now.saturating_duration_since(ps);
-                }
-            }
-            was_paused = is_paused;
+            clock.set_paused(now, is_paused);
 
+            // Let the stream deliver a frame it held back to stay within `fps` copies a second.
+            stream.pump();
             // Drain to the newest available frame (CFR: we only keep the latest).
             loop {
                 match rx.try_recv() {
@@ -224,13 +214,10 @@ fn encode_loop(
             }
 
             if !is_paused {
-                let active = now
-                    .saturating_duration_since(start)
-                    .saturating_sub(paused_accum);
-                let target = (active.as_nanos() / tick_nanos) as i64 + 1;
+                let target = clock.frames_due(now) as i64;
                 let mut n = 0;
                 while idx < target && n < max_catch_up {
-                    sink.write_frame(&latest, idx * frame_dur)?;
+                    sink.write_frame(&latest, idx)?;
                     idx += 1;
                     emitted += 1;
                     n += 1;
@@ -245,10 +232,7 @@ fn encode_loop(
                 let expected = if is_paused {
                     i64::MAX
                 } else {
-                    expected_audio_frames(
-                        now.saturating_duration_since(start)
-                            .saturating_sub(paused_accum),
-                    )
+                    expected_audio_frames(clock.active(now))
                 };
                 while let Ok(chunk) = arx.try_recv() {
                     if is_paused {

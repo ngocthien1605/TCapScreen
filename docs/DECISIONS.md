@@ -169,7 +169,19 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   each iteration, writes enough copies to make the emitted frame count equal
   `active_elapsed / frame_dur`. This both fixes static-screen smoothness and makes the output's
   duration track real time instead of drifting with `sleep` latency (an early sleep-per-frame
-  version produced a 3 s file for a 4 s recording — ~33 % fast).
+  version produced a 3 s file for a 4 s recording — ~33 % fast). The clock is one pure type
+  shared with the GIF recorder (`recorder/src/clock.rs`), and frame `n` is stamped
+  `n × 10^7 / fps` from its index, not by summing a rounded duration (30 fps rounded to
+  333 333 units would slip ~36 ms an hour against the audio track).
+- **Read back at most `fps` frames a second.** WGC fires at the display's refresh rate (up to
+  144 Hz), and every copy is a full-surface GPU→CPU read (~4.7 GB/s for 4K at 144 Hz) of which
+  the encoder keeps only the newest per tick. `CaptureStream::start` takes `max_fps`: a frame
+  arriving sooner than `1/fps` after the last copy is *held* (returned to the pool when a newer
+  one replaces it) and copied once due, either by the next arrival or by `CaptureStream::pump`,
+  which the encoder calls every tick. The pump is essential: on a static screen WGC sends nothing
+  more, so a held frame — the last change — would otherwise never be delivered. The decide-and-
+  copy runs under one lock, so frames are sent in order. The staging texture is cached on the
+  device and reused while the surface size is unchanged.
 - **Pause = stop the clock.** Paused wall-time is subtracted from `active_elapsed`, so the index
   doesn't advance and the output simply omits the paused span; resume continues seamlessly.
 - **Even dimensions + top-down stride.** H.264 rejects odd width/height, so dims are rounded down
@@ -246,9 +258,18 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   (mirroring the video `Session` API) captures frames, downscales each with
   `imaging::thumbnail` (longer edge → `gif_max_width`, never upscaling), and encodes a looping
   GIF via `image`'s `GifEncoder`. The `image` dependency gains the `gif` feature.
-- **Bounded in memory.** Capture stops at `gif_fps × gif_max_seconds` frames, so the in-RAM
-  frame buffer is small (e.g. 15 fps × 30 s = 450 downscaled frames) — no streaming GIF encoder
-  needed.
+- **Timed by the same clock as video.** Frame slots are counted on the shared `FrameClock`; a
+  frame still current at the next slot (static screen, or conversion slower than `gif_fps`) is
+  stored once with a longer delay instead of being converted again, and delays are rounded to
+  the GIF's centiseconds on the running total. Previously one frame was pushed per loop and the
+  file assumed exactly `gif_fps`, so a 4K source at ~50 ms per conversion played ~1.7× fast.
+  Measured after the change: 6.0 s recorded → 5.73 s of playback (the first frame arrives
+  ~0.3 s in), 86 slots stored as 19 distinct frames.
+- **Bounded in memory.** Capture stops at `gif_fps × gif_max_seconds` frame slots of
+  unpaused time, and repeated frames cost nothing, so the in-RAM buffer is at most
+  e.g. 15 fps × 30 s = 450 downscaled frames — no streaming GIF encoder needed. Reaching the cap
+  ends the recording like any other early end, so the user gets a notice ("it reached the
+  30-second limit for GIF recordings") instead of a toolbar that silently disappears.
 - **One handle, two backends.** `RecorderHandle` wraps a `Backend::{Video, Gif}` enum so GIF and
   MP4 share pause/stop and the same `record_flow` UX; the tray offers both.
 - **Verified by re-decoding** (`imaging::probe_gif` with an independent `GifDecoder`): a live

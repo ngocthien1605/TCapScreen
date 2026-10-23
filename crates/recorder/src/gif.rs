@@ -13,6 +13,7 @@ use capture_core::{CaptureStream, Frame, StreamEvent};
 use imaging::Rgba;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
+use crate::clock::FrameClock;
 use crate::{RecordCfg, RecordOutput, RecorderError, Result};
 
 #[derive(Debug)]
@@ -91,18 +92,27 @@ fn gif_loop(cfg: RecordCfg, paused: Arc<AtomicBool>, stopping: Arc<AtomicBool>) 
     };
 
     let (tx, rx) = mpsc::channel::<StreamEvent>();
-    let stream = CaptureStream::start(&cfg.target, cursor, tx).map_err(cap_err)?;
+    let stream = CaptureStream::start(&cfg.target, cursor, fps, tx).map_err(cap_err)?;
 
-    let max_frames = (fps * max_seconds) as usize;
+    // Frame slots at `fps` over unpaused time, capped at the length limit. Each stored image
+    // carries how many consecutive slots it fills: a frame that is still current at the next
+    // tick (static screen, or conversion running slower than `fps`) is extended rather than
+    // converted again, so playback length matches the time recorded.
+    let max_slots = fps as u64 * max_seconds as u64;
     let tick = Duration::from_nanos(1_000_000_000u64 / fps as u64);
-    let mut frames: Vec<Rgba> = Vec::new();
+    let mut frames: Vec<(Rgba, u64)> = Vec::new();
+    let mut slots: u64 = 0;
     let mut latest: Option<Frame> = None;
+    let mut fresh = false;
     let mut ended_early: Option<String> = None;
     let mut last_health_check = Instant::now();
     let start = Instant::now();
+    let mut clock = FrameClock::new(fps, start);
 
-    while !stopping.load(Ordering::SeqCst) && ended_early.is_none() && frames.len() < max_frames {
+    while !stopping.load(Ordering::SeqCst) && ended_early.is_none() && slots < max_slots {
         let now = Instant::now();
+        let is_paused = paused.load(Ordering::SeqCst);
+        clock.set_paused(now, is_paused);
         if now.saturating_duration_since(last_health_check) >= Duration::from_secs(1) {
             last_health_check = now;
             if let Err(e) = stream.check_health() {
@@ -110,9 +120,14 @@ fn gif_loop(cfg: RecordCfg, paused: Arc<AtomicBool>, stopping: Arc<AtomicBool>) 
                 break;
             }
         }
+        // Let the stream deliver a frame it held back to stay within `fps` copies a second.
+        stream.pump();
         loop {
             match rx.try_recv() {
-                Ok(StreamEvent::Frame(f)) => latest = Some(f),
+                Ok(StreamEvent::Frame(f)) => {
+                    latest = Some(f);
+                    fresh = true;
+                }
                 Ok(StreamEvent::Closed) => {
                     ended_early = Some(crate::pipeline::SOURCE_CLOSED.into());
                     break;
@@ -132,20 +147,40 @@ fn gif_loop(cfg: RecordCfg, paused: Arc<AtomicBool>, stopping: Arc<AtomicBool>) 
             break;
         }
 
-        if !paused.load(Ordering::SeqCst) {
+        if !is_paused {
             if let Some(f) = &latest {
-                if let Ok(rgba) = imaging::frame_to_rgba(f, true) {
-                    frames.push(imaging::thumbnail(&rgba, max_width));
+                let due = clock.frames_due(now).min(max_slots);
+                while slots < due {
+                    match frames.last_mut() {
+                        Some((_, n)) if !fresh => *n += 1,
+                        _ => match imaging::frame_to_rgba(f, true) {
+                            Ok(rgba) => {
+                                frames.push((imaging::thumbnail(&rgba, max_width), 1));
+                                fresh = false;
+                            }
+                            Err(e) => {
+                                tracing::warn!("gif frame conversion failed: {e}");
+                                break;
+                            }
+                        },
+                    }
+                    slots += 1;
                 }
             }
         }
         std::thread::sleep(tick);
     }
 
+    // Hitting the length cap ends the recording on its own; say so rather than just stopping.
+    if ended_early.is_none() && slots >= max_slots && !stopping.load(Ordering::SeqCst) {
+        ended_early = Some(format!(
+            "it reached the {max_seconds}-second limit for GIF recordings (gif_max_seconds)"
+        ));
+    }
     stream.stop();
 
     tracing::info!(
-        "gif capture finished: {} frames at {fps} fps ({:.1}s wall){}",
+        "gif capture finished: {} distinct frames over {slots} slots at {fps} fps ({:.1}s wall){}",
         frames.len(),
         start.elapsed().as_secs_f32(),
         match &ended_early {
@@ -160,7 +195,11 @@ fn gif_loop(cfg: RecordCfg, paused: Arc<AtomicBool>, stopping: Arc<AtomicBool>) 
             None => "no frames captured for GIF".into(),
         }));
     }
-    imaging::save_gif(&frames, fps, &cfg.out_path)
+    let timed: Vec<(Rgba, Duration)> = frames
+        .into_iter()
+        .map(|(img, n)| (img, Duration::from_nanos(n * 1_000_000_000 / fps as u64)))
+        .collect();
+    imaging::save_gif(&timed, &cfg.out_path)
         .map_err(|e| RecorderError::Platform(format!("gif encode: {e}")))?;
     match ended_early {
         Some(reason) => Err(RecorderError::EndedEarly {
