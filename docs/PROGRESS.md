@@ -193,6 +193,11 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: **Release 0.1.7** (tag `v0.1.7`): the Settings microphone picker. Verified by
+  hand first on the master build: choosing a microphone other than the Windows default made the
+  next recording use it (log names the chosen device). Still open from the checks page: a
+  Bluetooth headset mic through the picker (and whether opening it stops the headset's
+  system-audio loopback), mic unplug, throttle, tooltip, startup, display unplug, GPU reset.
 - 2026-10-23: Hardware checks, first pass (tester on the 0.1.6 tray build, results on the
   checks page, read back with the log). Pass: Settings taskbar button, two monitors at
   different scales, GIF length cap with notice, mic+system recording by ear, 102 s A/V sync by

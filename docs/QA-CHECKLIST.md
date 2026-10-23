@@ -120,11 +120,15 @@ there are copied into this file.
 - [ ] "No audio device" / a source that cannot open → the other source still records, the
       video is saved, and a dialog after the recording lists what is missing. *(Per-source setup
       and the dialog text are unit-tested; not provoked live: no way to make the mic fail here.)*
-- [ ] Settings → Microphone lists "System default (…)" plus each connected microphone; choosing
+- [x] Settings → Microphone lists "System default (…)" plus each connected microphone; choosing
       one and pressing OK writes its name to `microphone_device` and the next recording uses it;
       a chosen microphone that is unplugged shows as "not connected" and stays selected. *(Choice
       list and matching unit-tested; the dialog renders with the drop-down filled (`dev
-      settings-selftest`: 2 entries here). Not yet driven by hand.)*
+      settings-selftest`: 2 entries here). Driven by hand 2026-10-23 on the master build: with
+      the Realtek input as Windows default, choosing the built-in Intel array wrote its name to
+      `microphone_device` and the next recording used it (log: `audio source microphone:
+      "マイク配列 (…)"`); the tester confirmed the picker behaves as described. The
+      "not connected" entry and a Bluetooth headset mic were not exercised.)*
 - [ ] Unplugging a USB/Bluetooth microphone mid-recording → the rest of the take has no mic
       sound, the file is fine, and the dialog says the microphone stopped. *(2026-10-23: the
       device that dropped was the AirPods' output, so it was **system audio** that stopped
