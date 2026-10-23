@@ -10,7 +10,8 @@ pwsh -File scripts/build-portable.ps1
 ```
 
 Produces `dist/RustShot-<version>-portable-x64.zip` containing `rustshot.exe`, `USER-GUIDE.md`,
-and `LICENSE`. Unzip anywhere and run `rustshot.exe` — no installation, no admin rights. If the
+and `LICENSE`. The build also produces `rustshot-dev.exe` (developer diagnostics); it is a
+build artifact for development and QA and is not shipped. Unzip anywhere and run `rustshot.exe` — no installation, no admin rights. If the
 user enables "Run at startup", the registry entry points at the exe's current location, so keep
 the folder stable (or re-toggle the setting after moving it).
 

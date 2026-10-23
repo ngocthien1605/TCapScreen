@@ -6,15 +6,23 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 authors.workspace = true
-description = "RustShot application: tray, hotkeys, overlay, flyout, recording toolbar, settings, dev CLI."
+description = "RustShot application (library) with the `rustshot` tray binary and the `rustshot-dev` diagnostic CLI."
 default-run = "rustshot"
 
 [lints]
 workspace = true
 
+[lib]
+name = "rustshot_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rustshot"
-path = "src/main.rs"
+path = "src/bin/rustshot.rs"
+
+[[bin]]
+name = "rustshot-dev"
+path = "src/bin/rustshot-dev.rs"
 
 [dependencies]
 capture-core.workspace = true

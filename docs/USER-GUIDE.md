@@ -141,8 +141,8 @@ include_cursor = true
 countdown_seconds = 3
 capture_microphone = false
 capture_system_audio = false
-microphone_device = ""       # empty = system default; else a name (or part of one)
-                             # from `rustshot dev list-audio-inputs`
+microphone_device = ""       # empty = system default; else the microphone's name (or part
+                             # of it) as shown in Windows Settings > System > Sound > Input
 gif_max_width = 800          # longer edge; frames are scaled to fit
 gif_max_seconds = 30
 gif_fps = 15

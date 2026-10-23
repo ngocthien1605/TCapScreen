@@ -81,20 +81,21 @@ cargo deny check
 
 ## Developer / diagnostic CLI
 
-The binary is a GUI app, but `rustshot dev <cmd>` exposes headless diagnostics (these do **not**
-start the tray). When launched from a terminal it attaches to the parent console so output is
-visible. Examples:
+The build produces two programs from one library (`crates/app`): `rustshot.exe`, the tray app
+(GUI subsystem, no console), and `rustshot-dev.exe`, a console program with headless
+diagnostics that never start the tray. Only `rustshot.exe` ships in the portable zip. Examples:
 
 ```sh
-rustshot dev config                       # print the loaded (repaired) config + its path
-rustshot dev paths                        # print all resolved RustShot paths
-rustshot dev list-monitors                # enumerate monitors
-rustshot dev list-windows                 # enumerate capturable windows
-rustshot dev grab-monitor 0 shot.png      # full-monitor PNG
-rustshot dev grab-all desktop.png         # whole virtual desktop
-rustshot dev record-monitor 0 5 clip.mp4  # record monitor 0 for 5s to MP4
-rustshot dev record-gif 0 3 clip.gif      # record monitor 0 for 3s to GIF
-rustshot dev probe-mp4 clip.mp4           # decode back and report size/sample count
+rustshot-dev config                       # print the loaded (repaired) config + its path
+rustshot-dev paths                        # print all resolved RustShot paths
+rustshot-dev list-monitors                # enumerate monitors
+rustshot-dev list-windows                 # enumerate capturable windows
+rustshot-dev list-audio-inputs            # microphones usable as microphone_device
+rustshot-dev grab-monitor 0 shot.png      # full-monitor PNG
+rustshot-dev grab-all desktop.png         # whole virtual desktop
+rustshot-dev record-monitor 0 5 clip.mp4  # record monitor 0 for 5s to MP4
+rustshot-dev record-gif 0 3 clip.gif      # record monitor 0 for 3s to GIF
+rustshot-dev probe-mp4 clip.mp4           # decode back and report size/sample count
 ```
 
 ## Packaging

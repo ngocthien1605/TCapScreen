@@ -3,11 +3,14 @@
 These steps cannot run on a headless CI runner. Run them on a real Windows 11 desktop,
 ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 
+`dev <command>` below means `rustshot-dev <command>` (the diagnostics binary built alongside
+`rustshot.exe`; entries written before review item (7) used `rustshot dev <command>`).
+
 ## M0 — Scaffold
 - [ ] `rustshot.exe` launches to a tray icon with a context menu; no console window.
 - [ ] Tray menu → Quit exits cleanly (process gone, mutex released).
 - [ ] Launching a second instance does not create a second tray icon (single-instance).
-- [ ] `rustshot dev config` prints the loaded config and the config file path.
+- [ ] `rustshot-dev config` prints the loaded config and the config file path.
 - [ ] First run creates `%APPDATA%\RustShot\config.toml` and the output folder.
 - [ ] Logs appear under `%APPDATA%\RustShot\logs`.
 - [x] Corrupt `config.toml` → app still starts: the file is renamed `config.toml.broken-<n>`
@@ -24,15 +27,15 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
       open with a message; OK with a hotkey another app holds shows a dialog naming it.
 
 ## M1 — Capture engine (stills)
-- [ ] `rustshot dev list-monitors` lists every display with correct bounds + DPI/scale.
-- [ ] `rustshot dev grab-monitor 0 out.png` saves a pixel-correct full-monitor PNG.
+- [ ] `rustshot-dev list-monitors` lists every display with correct bounds + DPI/scale.
+- [ ] `rustshot-dev grab-monitor 0 out.png` saves a pixel-correct full-monitor PNG.
 - [ ] Image is correct on a 150%/200%-scaled monitor (no stretching, correct dimensions).
 - [ ] Wide image where stride ≠ width×4 is not sheared (stride handled).
 
 ## M2 — Screenshots
 > Already verified by automation (no manual step needed): monitor / window / region /
 > all-monitors grab, auto-naming, PNG/JPEG save, and clipboard image copy — via
-> `rustshot dev {list-windows,grab-all,grab-region,grab-window,clipboard-image}` plus a
+> `rustshot-dev {list-windows,grab-all,grab-region,grab-window,clipboard-image}` plus a
 > scripted System.Drawing check. The items below are the interactive/visual ones.
 - [ ] Region hotkey dims all monitors; drag shows live W×H; Enter/release captures; Esc cancels.
 - [x] Selection overlay look (Region + Window screenshots, region video, region GIF): full-screen white crosshair with a dark edge follows the cursor; hovered window / dragged selection has a red border and stays bright; size label stays on top. *(Verified by screenshotting the running overlay, idle and mid-drag.)* Window screenshots use the same look (verified). Right-click cancels on release, so no context menu pops up underneath *(verified).*
@@ -132,6 +135,6 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [x] Settings → Browse: the folder picker is modal to the dialog (dialog disabled while it is
       open, enabled again after it closes). Settings renders themed (Common Controls v6).
 - [x] Settings + capture dialog templates render without error — auto-verified by
-      `rustshot dev settings-selftest` (both must report OK, not a `-1` result).
+      `rustshot-dev settings-selftest` (both must report OK, not a `-1` result).
 - [ ] Run-at-startup toggle adds/removes the `Run` key (opt-in).
 - [ ] Installer produces a working Start-menu app on a clean Windows 11 VM; portable zip runs.

@@ -65,13 +65,14 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   `#[serde(default)]` on every field so older/partial config files load forward-compatibly.
 - **Single-instance: named mutex** (`CreateMutexW` + `GetLastError == ERROR_ALREADY_EXISTS`)
   via the `windows` crate — the prompt's recommended approach, no extra dependency.
-- **Dev CLI** (`clap`) lives in the app binary behind a `--dev <cmd>` subtree so GPU/display
-  paths can be exercised on a real desktop without the full tray UX. Running `--dev` does not
-  start the tray.
+- **Dev CLI** (`clap`) lets GPU/display paths be exercised on a real desktop without the tray
+  UX. Since review item (7) it is its own console binary, `rustshot-dev`, built from the same
+  library as the tray app (see M6); it never starts the tray.
 - **Hotkey model in `config`** as plain data (`mods: Vec<Modifier>`, `key: String`) so parsing
   and conflict detection are pure and unit-testable, independent of `global-hotkey`.
-- **Dev CLI uses a `dev` subcommand** (`rustshot dev grab-monitor 0 out.png`) rather than the
-  prompt's literal `--dev` prefix — clap models nested subcommands cleanly this way. Same intent.
+- **Dev commands are subcommands** (`rustshot-dev grab-monitor 0 out.png`) rather than the
+  prompt's literal `--dev` prefix — clap models them cleanly this way. Same intent. (Until
+  review item (7) they were `rustshot dev …` inside the tray binary.)
 
 ## M1 — Capture engine (stills)
 
@@ -277,10 +278,14 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 
 ## M6 — Polish
 
-- **GUI subsystem + lazy console attach.** `#![windows_subsystem = "windows"]` removes the
-  console for the tray app. `attach_parent_console()` only redirects stdout/stderr to the parent
-  console when stdout is *not* already an inherited handle, so the `dev` CLI and `--help` print
-  from a terminal without clobbering a pipe (which is how our own functional tests capture it).
+- **One library, two binaries.** `crates/app` is a library (`rustshot_app`) exposing only
+  `run_tray`, `run_dev` and `DevCmd`; everything else is crate-private. `rustshot.exe` is the
+  GUI-subsystem tray app (`#![windows_subsystem = "windows"]`, no console), and `rustshot-dev.exe`
+  is a plain console program for the diagnostics. This replaced a single GUI binary that
+  attached to its parent console at startup so `rustshot dev …` could print — a hack that broke
+  `2>file` redirects and needed care not to clobber pipes. Both binaries carry the same manifest
+  (DPI awareness, themed controls). `rustshot.exe dev …` now shows a box pointing to
+  `rustshot-dev.exe` instead of silently starting the tray. Only the tray exe ships in the zip.
 - **Run-at-startup re-writes the path.** Enabling always writes `current_exe()` to the HKCU
   `Run` key (repairs a stale entry if the portable exe moved); disabling deletes it. Applied at
   startup and on settings OK.

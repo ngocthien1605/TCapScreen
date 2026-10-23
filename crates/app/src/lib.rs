@@ -1,11 +1,8 @@
 //! RustShot — a lightweight Windows screenshot + screen-recording tray app.
 //!
-//! Running with no subcommand starts the tray application. The `dev` subcommand exposes
-//! diagnostic commands that do not start the tray (see [`dev`]).
-
-// GUI subsystem (no console window for the tray app). When launched from a terminal we attach
-// to the parent console at startup so the `dev` CLI still prints (see `attach_parent_console`).
-#![windows_subsystem = "windows"]
+//! The library holds the whole application; two thin binaries drive it:
+//! `rustshot` (the GUI-subsystem tray app, [`run_tray`]) and `rustshot-dev` (a console program
+//! for developer/diagnostic commands, [`run_dev`]). Everything else is crate-private.
 
 mod annotate;
 mod capture_flow;
@@ -29,7 +26,6 @@ mod tray;
 
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
 use config::{Recovery, Settings};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -37,48 +33,30 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, TranslateMessage, MSG,
 };
 
+pub use dev::DevCmd;
+
 use crate::single_instance::SingleInstance;
 
 const SINGLE_INSTANCE_NAME: &str = "RustShot.SingleInstance.Mutex";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "rustshot",
-    version,
-    about = "Screenshots and screen recording for Windows"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
+/// Run a developer/diagnostic command (the `rustshot-dev` binary). Never starts the tray.
+pub fn run_dev(cmd: DevCmd) -> ExitCode {
+    dev::run(cmd)
 }
 
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Developer/diagnostic commands (these do not start the tray).
-    Dev {
-        #[command(subcommand)]
-        cmd: dev::DevCmd,
-    },
-}
-
-fn main() -> ExitCode {
-    // In the GUI subsystem there's no console; if we were launched from a terminal, attach to it
-    // so the dev CLI (and clap's --help/errors) are visible.
-    attach_parent_console();
-
-    // Must happen before any window (incl. the tray's hidden one) so all coordinates are in
-    // true physical pixels on mixed-DPI setups.
-    capture_core::ensure_process_dpi_aware();
-
-    let cli = Cli::parse();
-    match cli.command {
-        Some(Command::Dev { cmd }) => dev::run(cmd),
-        None => run_app(),
-    }
+/// Tell someone following old instructions (`rustshot dev …`) where the commands went. The tray
+/// binary has no console, so this is a message box rather than text.
+pub fn dev_commands_moved() -> ExitCode {
+    notify::error(
+        "Developer commands have moved.",
+        "Run them with rustshot-dev.exe instead of \"rustshot dev\", for example:\n\n\
+         rustshot-dev list-monitors",
+    );
+    ExitCode::FAILURE
 }
 
 /// Start the tray application.
-fn run_app() -> ExitCode {
+pub fn run_tray() -> ExitCode {
     // Logging first so everything after is captured; then the panic hook, which relies on it.
     let logs_dir = config::paths::logs_dir().ok();
     let _log_guard = logs_dir.as_deref().and_then(logging::init);
@@ -218,44 +196,6 @@ pub(crate) fn usable_output_folder(
                     fallback.display()
                 )),
             ))
-        }
-    }
-}
-
-/// Attach to the launching terminal's console (if any) and redirect stdout/stderr to it, so a
-/// GUI-subsystem binary still prints when run from a shell. No-op when launched from Explorer.
-fn attach_parent_console() {
-    use windows::core::w;
-    use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_WRITE, OPEN_EXISTING,
-    };
-    use windows::Win32::System::Console::{
-        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
-        STD_OUTPUT_HANDLE,
-    };
-    // SAFETY: console/file handle setup; all failures are tolerated (we simply stay windowless).
-    unsafe {
-        // If stdout is already a valid (inherited) handle — a pipe or redirect from the shell —
-        // leave it alone; overriding it would break piped output.
-        if let Ok(h) = GetStdHandle(STD_OUTPUT_HANDLE) {
-            if !h.is_invalid() {
-                return;
-            }
-        }
-        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
-            return; // no parent console (launched from Explorer / as a startup entry)
-        }
-        if let Ok(handle) = CreateFileW(
-            w!("CONOUT$"),
-            FILE_GENERIC_WRITE.0,
-            FILE_SHARE_WRITE,
-            None,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            None,
-        ) {
-            let _ = SetStdHandle(STD_OUTPUT_HANDLE, handle);
-            let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
         }
     }
 }
