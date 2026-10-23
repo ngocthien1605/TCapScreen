@@ -30,11 +30,15 @@ Releases are built and published by GitHub Actions (`.github/workflows/release.y
 3. The workflow re-runs the gate (fmt, clippy, tests, cargo-deny), fails unless the tag equals
    `v<workspace version>`, builds the portable zip with `scripts/build-portable.ps1`, writes
    `RustShot-<version>-portable-x64.zip.sha256` (`sha256sum -c` format), and creates the GitHub
-   release with both files, titled `RustShot v<version>`, with the tag message as its notes.
+   release with both files, titled `RustShot v<version>`. Its notes are the tag message minus
+   its first line (which would repeat the title), so start the message with a one-line title.
 
 To (re)attach the zip to a tag that already exists — e.g. one released by hand before this
 workflow existed — run it from **Actions → Release → Run workflow** with that tag. If the release
-already exists, its notes are kept and its assets replaced.
+already exists, its notes are kept and its assets replaced (a hand-uploaded zip is swapped for
+the CI-built one, whose checksum differs). A tag older than the toolchain pin says
+`channel = "stable"`; if a newer stable trips a clippy lint on that old code, enter `1.98.1` in
+the run form's **toolchain** field.
 
 CI (`ci.yml`) builds the same zip on every push to `master` and keeps it for 14 days as the
 `rustshot-portable` workflow artifact, so the packaging step is tested before a tag needs it.

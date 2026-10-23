@@ -18,7 +18,8 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   tag re-runs the whole gate (a tag push gets no CI run of its own), checks the tag equals the
   workspace version, runs `scripts/build-portable.ps1` (the same script CI runs on every push,
   so packaging is exercised continuously), writes a `sha256sum`-format checksum, and publishes
-  both files to a GitHub release whose notes are the annotated tag's message. A release that
+  both files to a GitHub release whose notes are the annotated tag's message (minus its
+  title line). A release that
   already exists (made by hand) keeps its notes and gets its assets replaced. The MSI is not
   built there: WiX v3 isn't guaranteed on `windows-latest`.
 - **Crate versions verified against crates.io on 2026-10-22** and centralised in the workspace

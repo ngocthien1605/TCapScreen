@@ -10,6 +10,10 @@ on:
       tag:
         description: 'Existing tag to build and publish (e.g. v0.1.4)'
         required: true
+      toolchain:
+        description: 'Rust toolchain to build with (blank = the tag''s rust-toolchain.toml)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -31,7 +35,25 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
       # A tag push gets no CI run (CI filters on branches), so the release re-runs the gate.
-      - uses: ./.github/actions/setup-rust
+      # The toolchain step is inline (not the repo's composite action) so it also works for a
+      # tag checked out from before that action existed.
+      - name: Install toolchain from rust-toolchain.toml
+        shell: pwsh
+        env:
+          TOOLCHAIN_OVERRIDE: ${{ inputs.toolchain }}
+        run: |
+          $ch = $env:TOOLCHAIN_OVERRIDE
+          if (-not $ch) {
+            $m = Select-String -Path rust-toolchain.toml -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+            if (-not $m) { throw 'rust-toolchain.toml has no channel' }
+            $ch = $m.Matches.Groups[1].Value
+          }
+          rustup toolchain install $ch --no-self-update --profile minimal -c rustfmt,clippy -t x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "rustup failed to install $ch" }
+          rustup default $ch
+          # Outranks rust-toolchain.toml, so an override really is used.
+          "RUSTUP_TOOLCHAIN=$ch" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          rustc --version
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
@@ -63,10 +85,10 @@ jobs:
           if (-not (Test-Path $zip)) { throw "missing $zip" }
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           # sha256sum format, so `sha256sum -c` works on it.
-          "$hash *$(Split-Path $zip -Leaf)" | Out-File -FilePath "$zip.sha256" -Encoding ascii -NoNewline
+          [IO.File]::WriteAllText("$PWD/$zip.sha256", "$hash *$(Split-Path $zip -Leaf)`n")
           Get-Content "$zip.sha256"
-      # `--notes-from-tag` reads the annotated tag message; make sure the tag object itself is
-      # here (not a lightweight copy of it).
+      # The release notes come from the annotated tag message; make sure the tag object itself
+      # is here (not a lightweight copy of it).
       - name: Fetch the tag object
         run: git fetch --force origin "refs/tags/${env:TAG}:refs/tags/${env:TAG}"
       - name: Publish GitHub release
@@ -74,6 +96,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # `gh release view` failing is an expected answer here, not an error.
+          $PSNativeCommandUseErrorActionPreference = $false
           $files = @(
             "dist/RustShot-$env:RELEASE_VERSION-portable-x64.zip",
             "dist/RustShot-$env:RELEASE_VERSION-portable-x64.zip.sha256"
@@ -83,6 +107,10 @@ jobs:
             # The release exists (e.g. created by hand): replace its assets, keep its notes.
             gh release upload $env:TAG @files --clobber
           } else {
-            gh release create $env:TAG @files --title "RustShot $env:TAG" --verify-tag --notes-from-tag
+            # Notes = the annotated tag message minus its subject line, which repeats the title.
+            $notes = (git tag -l --format='%(contents:body)' $env:TAG | Out-String).Trim()
+            if (-not $notes) { $notes = (git tag -l --format='%(contents)' $env:TAG | Out-String).Trim() }
+            [IO.File]::WriteAllText("$PWD/release-notes.md", "$notes`n")
+            gh release create $env:TAG @files --title "RustShot $env:TAG" --verify-tag --notes-file release-notes.md
           }
           if ($LASTEXITCODE -ne 0) { throw "gh release failed" }
