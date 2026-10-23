@@ -120,7 +120,7 @@ pub fn save_gif(
         }
         Ok(())
     };
-    let result = encode().and_then(|()| std::fs::rename(&tmp, path).map_err(io_err(path)));
+    let result = encode().and_then(|()| rename_with_retry(&tmp, path).map_err(io_err(path)));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -269,10 +269,33 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ImagingError> {
         .unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
     std::fs::write(&tmp, bytes).map_err(io_err(&tmp))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
+    rename_with_retry(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         io_err(path)(e)
     })
+}
+
+/// `rename`, retried briefly while the target is held open by someone else: sync clients and
+/// indexers (OneDrive, antivirus) open a new file within milliseconds to read it, and replacing
+/// a file that is open fails with a sharing violation until they let go.
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    const ATTEMPTS: u32 = 10;
+    let mut attempt = 1;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if attempt < ATTEMPTS && is_transient_lock(&e) => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Access denied (5), sharing violation (32), or lock violation (33).
+fn is_transient_lock(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5 | 32 | 33))
+        || e.kind() == std::io::ErrorKind::PermissionDenied
 }
 
 /// Save an image to `path`, choosing the encoder from the file extension (png/jpg/jpeg). The
@@ -658,6 +681,32 @@ mod tests {
             1,
             "no temp file left"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn rename_waits_out_a_brief_lock_on_the_target() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("rustshot_lock_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (from, to) = (dir.join("new.tmp"), dir.join("shot.png"));
+        std::fs::write(&from, b"new").unwrap();
+        std::fs::write(&to, b"old").unwrap();
+        // Hold the target open without delete sharing (as a sync client might), then let go.
+        let holder = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1) // FILE_SHARE_READ only
+            .open(&to)
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            drop(holder);
+        });
+        rename_with_retry(&from, &to).unwrap();
+        release.join().unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

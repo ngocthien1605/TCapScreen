@@ -103,6 +103,15 @@ pub const NAMED_KEYS: &[&str] = &[
     "NumpadDivide",
     "NumpadDecimal",
     "NumpadEnter",
+    "NumpadEqual",
+    "NumpadComma",
+    "NumpadClear",
+    "Help",
+    "Sleep",
+    "IntlBackslash",
+    "IntlRo",
+    "IntlYen",
+    "Convert",
 ];
 
 /// A hotkey: zero or more modifiers plus a single main key (e.g. `Ctrl+Shift+R`,
