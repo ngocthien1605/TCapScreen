@@ -16,8 +16,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HMENU, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WNDCLASSW,
 };
 
-use crate::flyout::Flyout;
-use crate::{capture_flow, flyout};
+use crate::flows;
+use crate::ui::flyout;
+use crate::ui::flyout::Flyout;
 
 /// Custom message carrying an [`Action`] in its `wParam`.
 pub const WM_RUSTSHOT_ACTION: u32 = WM_APP + 1;
@@ -104,9 +105,9 @@ pub struct AppState {
     /// The most recent post-capture flyout, kept alive until dismissed/replaced.
     pub flyout: Option<Flyout>,
     /// The shot kind queued behind the delay timer.
-    pub pending_shot: Option<capture_flow::ShotKind>,
+    pub pending_shot: Option<flows::capture::ShotKind>,
     /// The in-progress recording (handle + toolbar), if any.
-    pub recording: Option<crate::recording::Recording>,
+    pub recording: Option<crate::ui::recording::Recording>,
     /// A recording request queued behind the countdown.
     pub pending_record: Option<recorder::RecordCfg>,
     /// Registered global hotkeys (kept alive; replaced when settings change them).
@@ -205,29 +206,29 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
 fn handle(action: Action) {
     use Action::*;
     match action {
-        ShotRegion => capture_flow::begin(capture_flow::ShotKind::Region),
-        ShotWindow => capture_flow::begin(capture_flow::ShotKind::Window),
-        ShotMonitor => capture_flow::begin(capture_flow::ShotKind::Monitor),
-        ShotAllMonitors => capture_flow::begin(capture_flow::ShotKind::AllMonitors),
-        ExecuteDelayedShot => capture_flow::execute_pending(),
-        RecordRegion => crate::record_flow::begin(false),
-        RecordGif => crate::record_flow::begin(true),
-        ExecuteRecordStart => crate::record_flow::execute_start(),
-        RecordPauseToggle => crate::record_flow::toggle_pause(),
-        StopRecording => crate::record_flow::stop(),
-        RecordPoll => crate::record_flow::poll(),
+        ShotRegion => flows::capture::begin(flows::capture::ShotKind::Region),
+        ShotWindow => flows::capture::begin(flows::capture::ShotKind::Window),
+        ShotMonitor => flows::capture::begin(flows::capture::ShotKind::Monitor),
+        ShotAllMonitors => flows::capture::begin(flows::capture::ShotKind::AllMonitors),
+        ExecuteDelayedShot => flows::capture::execute_pending(),
+        RecordRegion => flows::record::begin(false),
+        RecordGif => flows::record::begin(true),
+        ExecuteRecordStart => flows::record::execute_start(),
+        RecordPauseToggle => flows::record::toggle_pause(),
+        StopRecording => flows::record::stop(),
+        RecordPoll => flows::record::poll(),
         OpenFolder => {
             // Clone the path out, then shell out *outside* the borrow (explorer can pump).
             if let Some(folder) = with_app(|app| app.output_folder.clone()) {
                 flyout::open_in_explorer(&folder);
             }
         }
-        Settings => crate::settings_ui::open(),
+        Settings => crate::ui::settings::open(),
         Quit => {
             tracing::info!("Quit selected");
             // Finalize an active recording (or cancel a countdown) and drop the flyout *before*
             // leaving the loop, so the output file is playable and no window outlives the state.
-            crate::record_flow::stop();
+            flows::record::stop();
             with_app(|app| {
                 app.flyout = None;
                 app.pending_shot = None;
@@ -291,7 +292,7 @@ fn handle(action: Action) {
             if let Some(f) = with_app(|app| app.flyout.take()).flatten() {
                 let path = f.path().to_owned();
                 drop(f);
-                crate::annotate::open(&path);
+                crate::ui::annotate::open(&path);
             }
         }
         FlyoutDismiss => {

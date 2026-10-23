@@ -19,8 +19,8 @@ use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use crate::dispatch::{self, Action};
-use crate::flyout::Flyout;
-use crate::overlay::{self, Outcome};
+use crate::ui::flyout::Flyout;
+use crate::ui::overlay::{self, Outcome};
 
 /// Which screenshot the user asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

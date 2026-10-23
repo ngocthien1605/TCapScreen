@@ -4,25 +4,19 @@
 //! `rustshot` (the GUI-subsystem tray app, [`run_tray`]) and `rustshot-dev` (a console program
 //! for developer/diagnostic commands, [`run_dev`]). Everything else is crate-private.
 
-mod annotate;
-mod capture_flow;
 mod clipboard;
 mod dev;
 mod dispatch;
-mod flyout;
+mod flows;
 mod hotkeys;
 mod icon;
 mod logging;
 mod notify;
-mod overlay;
 mod panic_guard;
 mod platform;
-mod record_flow;
-mod recording;
-mod settings_ui;
 mod single_instance;
 mod startup;
-mod tray;
+mod ui;
 
 use std::process::ExitCode;
 
@@ -138,7 +132,7 @@ fn start() -> anyhow::Result<()> {
     // Create the dispatch window (owns app state), the tray, and the global hotkeys. Each must
     // stay alive for the whole message loop.
     let dispatch_hwnd = dispatch::create(settings.clone(), output_folder)?;
-    let _tray = tray::build(dispatch_hwnd)?;
+    let _tray = ui::tray::build(dispatch_hwnd)?;
     let hotkeys = hotkeys::register(&settings.hotkeys, dispatch_hwnd);
     if let Some(hk) = &hotkeys {
         // A key held by another app (Snipping Tool, another capture tool) is a permanent

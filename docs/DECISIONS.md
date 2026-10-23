@@ -272,12 +272,21 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   ends the recording like any other early end, so the user gets a notice ("it reached the
   30-second limit for GIF recordings") instead of a toolbar that silently disappears.
 - **One handle, two backends.** `RecorderHandle` wraps a `Backend::{Video, Gif}` enum so GIF and
-  MP4 share pause/stop and the same `record_flow` UX; the tray offers both.
+  MP4 share pause/stop and the same recording flow (`flows::record`); the tray offers both.
 - **Verified by re-decoding** (`imaging::probe_gif` with an independent `GifDecoder`): a live
   capture produced a 640×360, 14-frame animated GIF from a 1080p monitor.
 
 ## M6 — Polish
 
+- **App crate layout** (review item 7). `crates/app` is a library with two thin binaries
+  (`src/bin/rustshot.rs`, `src/bin/rustshot-dev.rs`). Inside: `ui/` (tray, overlay, flyout,
+  annotate, recording toolbar, settings — the last split into `template`, `dialog` and
+  `capture`), `flows/` (`capture`, `record`: the screenshot and recording sequences driven by
+  the dispatch window), `platform/` (DPI scaling, owned GDI handles, `Rect`→`RECT`), and at the
+  top level the dispatch window and app state, hotkeys, notify, logging, panic guard,
+  single-instance, startup, clipboard and the `dev` commands. Each window keeps its own
+  window procedure: they differ in who owns the state (the window, a struct, or a nested loop),
+  so a generic wrapper would hide that; `panic_guard::guard` is the shared part.
 - **One library, two binaries.** `crates/app` is a library (`rustshot_app`) exposing only
   `run_tray`, `run_dev` and `DevCmd`; everything else is crate-private. `rustshot.exe` is the
   GUI-subsystem tray app (`#![windows_subsystem = "windows"]`, no console), and `rustshot-dev.exe`
@@ -297,7 +306,7 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   DPI-unaware and iconless). The manifest also requests **Common Controls v6**, so buttons,
   checkboxes and edits are themed (Windows 11 look) instead of the Windows 2000 fallback;
   verified with a capture of the live Settings dialog and `dev settings-selftest`.
-- **Hand-placed windows scale with the monitor's DPI** (`app/src/dpi.rs`). Per-Monitor-V2
+- **Hand-placed windows scale with the monitor's DPI** (`app/src/platform/dpi.rs`). Per-Monitor-V2
   means Windows no longer stretches our windows, so the flyout, recording toolbar and editor
   toolbar, whose layouts are written in 96-DPI pixels, are scaled by the DPI of the monitor they
   open on (verified at 125 %: flyout 625×212, toolbar 300×70) and use the system message font at

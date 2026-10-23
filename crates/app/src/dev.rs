@@ -367,8 +367,8 @@ fn cmd_list_audio_inputs() -> Result<()> {
 }
 
 fn cmd_settings_selftest() -> Result<()> {
-    let main_ret = crate::settings_ui::selftest();
-    let cap_ret = crate::settings_ui::capture_selftest();
+    let main_ret = crate::ui::settings::selftest();
+    let cap_ret = crate::ui::settings::capture_selftest();
     if main_ret == -1 || cap_ret == -1 {
         bail!("dialog render FAILED (settings = {main_ret}, capture = {cap_ret})");
     }

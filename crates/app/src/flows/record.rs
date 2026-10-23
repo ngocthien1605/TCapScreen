@@ -13,8 +13,8 @@ use recorder::{AudioCfg, RecordCfg, RecordOutput, Recorder};
 use windows::Win32::Foundation::HWND;
 
 use crate::dispatch::{self, Action};
-use crate::overlay::{self, Outcome};
-use crate::recording::{Recording, Toolbar};
+use crate::ui::overlay::{self, Outcome};
+use crate::ui::recording::{Recording, Toolbar};
 
 /// Begin a recording: pick a target, queue it behind the countdown, then start. `gif` selects
 /// animated-GIF output instead of MP4.
