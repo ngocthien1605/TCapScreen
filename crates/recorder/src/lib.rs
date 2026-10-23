@@ -26,7 +26,7 @@ mod pipeline;
 pub mod probe;
 
 #[cfg(windows)]
-pub use audio::{list_inputs, probe_capture, AudioInput, AudioProbe, AudioRequest};
+pub use audio::{find_input, list_inputs, probe_capture, AudioInput, AudioProbe, AudioRequest};
 
 /// Things the user should know about a recording that still produced a file — chiefly audio
 /// that could not be recorded (a missing microphone, a device that stopped). Shared between the

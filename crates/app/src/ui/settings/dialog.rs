@@ -7,6 +7,8 @@ use super::*;
 struct Draft {
     initial: Settings,
     result: Option<Settings>,
+    /// The microphone drop-down's entries, in order (filled when the dialog opens).
+    mics: Vec<MicChoice>,
 }
 
 /// Open the modal Settings dialog and, on OK, persist + apply the changes.
@@ -35,6 +37,7 @@ pub fn open() {
     let mut draft = Draft {
         initial: settings,
         result: None,
+        mics: Vec::new(),
     };
 
     // SAFETY: standard modal dialog from an in-memory template; `draft` outlives the call.
@@ -140,6 +143,7 @@ pub fn selftest() -> isize {
     let mut draft = Draft {
         initial: Settings::default(),
         result: None,
+        mics: Vec::new(),
     };
     // SAFETY: parentless modal dialog from an in-memory template; `draft` outlives the call.
     let ret = unsafe {
@@ -178,8 +182,11 @@ unsafe fn selftest_dlgproc_inner(hwnd: HWND, msg: u32, _wparam: WPARAM, lparam: 
         WM_INITDIALOG => {
             // SAFETY: populate controls, then arm a one-shot timer to auto-cancel.
             unsafe {
-                let draft = &*(lparam.0 as *const Draft);
+                let draft = &mut *(lparam.0 as *mut Draft);
                 populate(hwnd, &draft.initial);
+                draft.mics = populate_mics(hwnd, None);
+                sync_mic_enabled(hwnd);
+                tracing::info!("settings selftest: {} microphone entries", draft.mics.len());
                 SetTimer(Some(hwnd), 1, 600, None);
             }
             1
@@ -222,8 +229,11 @@ unsafe fn dlgproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
             // SAFETY: stash the Draft pointer for later messages, then populate controls.
             unsafe {
                 SetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(DWLP_USER), lparam.0);
-                let draft = &*(lparam.0 as *const Draft);
+                let draft = &mut *(lparam.0 as *mut Draft);
                 populate(hwnd, &draft.initial);
+                draft.mics =
+                    populate_mics(hwnd, draft.initial.recording.microphone_device.as_deref());
+                sync_mic_enabled(hwnd);
             }
             show_in_taskbar(hwnd);
             1
@@ -241,7 +251,7 @@ unsafe fn dlgproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
                         return 1;
                     }
                     let d = &mut *ptr;
-                    match try_gather(hwnd, &d.initial) {
+                    match try_gather(hwnd, &d.initial, &d.mics) {
                         Ok(s) => {
                             d.result = Some(s);
                             let _ = EndDialog(hwnd, IDOK.0 as isize);
@@ -265,6 +275,9 @@ unsafe fn dlgproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
             } else if id == BTN_BROWSE {
                 browse(hwnd);
                 1
+            } else if id == CHK_MIC {
+                sync_mic_enabled(hwnd);
+                0
             } else {
                 0
             }
@@ -344,7 +357,7 @@ fn warn_box(hwnd: HWND, msg: &str) {
     }
 }
 
-fn is_checked(hwnd: HWND, id: i32) -> bool {
+pub(super) fn is_checked(hwnd: HWND, id: i32) -> bool {
     // SAFETY: reads a child button's check state.
     unsafe { IsDlgButtonChecked(hwnd, id) == BST_CHECKED.0 }
 }
@@ -378,12 +391,13 @@ pub(super) fn validate_folder(text: &str) -> Result<(), String> {
 
 /// Read every control into a `Settings`, validating the hotkeys. Returns a user-facing message
 /// (shown in a warning box, dialog left open) if a shortcut is unparseable or two conflict.
-fn try_gather(hwnd: HWND, initial: &Settings) -> Result<Settings, String> {
+fn try_gather(hwnd: HWND, initial: &Settings, mics: &[MicChoice]) -> Result<Settings, String> {
     let mut s = initial.clone();
     s.screenshot.include_cursor = is_checked(hwnd, CHK_CURSOR);
     s.screenshot.copy_to_clipboard = is_checked(hwnd, CHK_CLIP);
     s.recording.capture_microphone = is_checked(hwnd, CHK_MIC);
     s.recording.capture_system_audio = is_checked(hwnd, CHK_SYS);
+    s.recording.microphone_device = selected_mic(hwnd, mics);
     s.run_at_startup = is_checked(hwnd, CHK_STARTUP);
     s.screenshot.format = if is_checked(hwnd, CHK_JPEG) {
         ImageFormat::Jpeg

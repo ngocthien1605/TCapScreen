@@ -113,6 +113,11 @@ there are copied into this file.
 - [ ] "No audio device" / a source that cannot open → the other source still records, the
       video is saved, and a dialog after the recording lists what is missing. *(Per-source setup
       and the dialog text are unit-tested; not provoked live: no way to make the mic fail here.)*
+- [ ] Settings → Microphone lists "System default (…)" plus each connected microphone; choosing
+      one and pressing OK writes its name to `microphone_device` and the next recording uses it;
+      a chosen microphone that is unplugged shows as "not connected" and stays selected. *(Choice
+      list and matching unit-tested; the dialog renders with the drop-down filled (`dev
+      settings-selftest`: 2 entries here). Not yet driven by hand.)*
 - [ ] Unplugging a USB/Bluetooth microphone mid-recording → the rest of the take has no mic
       sound, the file is fine, and the dialog says the microphone stopped.
 - [ ] A 24-bit / 5.1 device records audible sound (decode and downmix are unit-tested; this

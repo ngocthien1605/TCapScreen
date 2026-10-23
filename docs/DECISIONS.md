@@ -237,8 +237,11 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
   buffer boundaries. `GetMixFormat` memory is freed (`CoTaskMemFree` guard).
 - **Microphone choice.** `microphone_device` is matched against the active capture endpoints:
   the endpoint id, else the friendly name (case-insensitive), else the first name containing it.
-  No match → the default microphone, with a note. `dev list-audio-inputs` prints the names; there
-  is no picker in Settings yet.
+  No match → the default microphone, with a note. Settings has a **Microphone** drop-down built
+  from the same list and the same matching rule (`recorder::find_input`), so it shows what a
+  recording will pick; it stores the device's *name* (readable in `config.toml`, survives the
+  endpoint id changing when a USB device moves port). A configured device that is not connected
+  is kept as a "not connected" entry rather than silently replaced on OK.
 - **Graceful degradation, reported.** Each source is opened independently: a missing or busy
   microphone no longer discards a working system-audio capture. Device setup overlaps the wait
   for the first video frame and may take up to 10 s (a Bluetooth headset switching profile);

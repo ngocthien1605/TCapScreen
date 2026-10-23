@@ -18,14 +18,14 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     CheckDlgButton, IsDlgButtonChecked, BST_CHECKED, DLG_BUTTON_CHECK_STATE,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetKeyState, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DefWindowProcW, DialogBoxIndirectParamW, EndDialog, GetDlgItem, GetDlgItemInt,
-    GetDlgItemTextW, GetParent, GetWindowLongPtrW, MessageBoxW, PostMessageW, SetDlgItemInt,
-    SetDlgItemTextW, SetTimer, SetWindowLongPtrW, SetWindowTextW, DLGTEMPLATE, GWLP_USERDATA,
-    GWLP_WNDPROC, IDCANCEL, IDOK, MB_ICONWARNING, MB_OK, WINDOW_LONG_PTR_INDEX, WM_CHAR, WM_CLOSE,
-    WM_COMMAND, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER, WNDPROC,
+    GetDlgItemTextW, GetParent, GetWindowLongPtrW, MessageBoxW, PostMessageW, SendDlgItemMessageW,
+    SetDlgItemInt, SetDlgItemTextW, SetTimer, SetWindowLongPtrW, SetWindowTextW, DLGTEMPLATE,
+    GWLP_USERDATA, GWLP_WNDPROC, IDCANCEL, IDOK, MB_ICONWARNING, MB_OK, WINDOW_LONG_PTR_INDEX,
+    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDPROC,
 };
 
 use crate::dispatch;
@@ -45,6 +45,8 @@ const EDIT_QUALITY: i32 = 1010;
 const EDIT_FPS: i32 = 1011;
 const EDIT_FOLDER: i32 = 1012;
 const BTN_BROWSE: i32 = 1013;
+const LABEL_MIC: i32 = 1014;
+const COMBO_MIC: i32 = 1015;
 // Six editable shortcut fields (in a fixed order) + per-row "Modify" buttons + restore button.
 const EDIT_HK_BASE: i32 = 1020;
 const BTN_RESTORE_HK: i32 = 1030;
@@ -65,10 +67,12 @@ const HK_LABELS: [&str; 6] = [
 
 mod capture;
 mod dialog;
+mod mic;
 mod template;
 
 use capture::*;
 use dialog::*;
+use mic::*;
 use template::*;
 
 pub use capture::capture_selftest;
@@ -161,9 +165,10 @@ mod tests {
     #[test]
     fn real_template_builds_with_expected_item_count() {
         let t = build_template();
-        // Base 15 (6 checkboxes + 3 labels + 3 edits + Browse + OK + Cancel) plus the hotkeys
-        // section: 1 header + 6 labels + 6 edits + 6 Modify buttons + Restore = 20 -> 35.
-        assert_eq!(u16::from_le_bytes([t[8], t[9]]), 35);
+        // Base 15 (6 checkboxes + 3 labels + 3 edits + Browse + OK + Cancel), the microphone
+        // label + drop-down (2), and the hotkeys section: 1 header + 6 labels + 6 edits + 6 Modify
+        // buttons + Restore = 20 -> 37.
+        assert_eq!(u16::from_le_bytes([t[8], t[9]]), 37);
     }
 
     #[test]

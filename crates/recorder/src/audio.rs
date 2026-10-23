@@ -566,6 +566,16 @@ pub fn list_inputs() -> windows::core::Result<Vec<AudioInput>> {
     }
 }
 
+/// The index in `inputs` of the microphone `wanted` names, by the same rule a recording uses to
+/// pick one (see [`match_input`]), so a picker shows what will actually be recorded.
+pub fn find_input(inputs: &[AudioInput], wanted: &str) -> Option<usize> {
+    let pairs: Vec<(String, String)> = inputs
+        .iter()
+        .map(|i| (i.id.clone(), i.name.clone()))
+        .collect();
+    match_input(&pairs, wanted)
+}
+
 /// Pick the input matching `wanted`: the exact endpoint id, else an exact (case-insensitive)
 /// name, else the first name containing it.
 fn match_input(inputs: &[(String, String)], wanted: &str) -> Option<usize> {

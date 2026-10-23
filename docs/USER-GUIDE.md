@@ -103,6 +103,12 @@ offers the same actions, and you can rebind the hotkeys in **Settings…** (or i
 Tray → **Settings…** opens a dialog for the common options (cursor capture, copy-to-clipboard,
 microphone/system audio, run-at-startup, JPEG quality, video FPS, and the output folder).
 
+**Microphone** chooses which microphone "Record microphone" uses: **System default** (whatever
+Windows has set as the default input, named in brackets) or any connected microphone. A
+microphone you chose earlier that isn't connected right now stays selected, marked "not
+connected", so it is used again when you plug it back in; until then recordings use the default
+microphone and say so afterwards. The list is greyed out while "Record microphone" is off.
+
 It also has a **Global hotkeys** section with an editable field for each of the six actions.
 Either click **Modify** next to a row and press the key combination you want (including
 `PrintScreen` and `Alt`/`Win` combos; Backspace clears it, Enter accepts, Esc cancels), or type
@@ -143,7 +149,7 @@ countdown_seconds = 3        # 0..=30
 capture_microphone = false
 capture_system_audio = false
 microphone_device = ""       # empty = system default; else the microphone's name (or part
-                             # of it) as shown in Windows Settings > System > Sound > Input
+                             # of it); set by the Microphone list in Settings
 gif_max_width = 800          # longer edge, 16..=7680; frames are scaled to fit
 gif_max_seconds = 30         # 1..=600; the recording stops, with a notice, at the limit
 gif_fps = 15

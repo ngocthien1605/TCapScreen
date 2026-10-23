@@ -7,6 +7,7 @@ use super::*;
 pub(super) const ATOM_BUTTON: u16 = 0x0080;
 const ATOM_EDIT: u16 = 0x0081;
 pub(super) const ATOM_STATIC: u16 = 0x0082;
+const ATOM_COMBOBOX: u16 = 0x0085;
 
 // Window/dialog/control style bits (avoids pulling the typed constants into the template).
 pub(super) const WS_CHILD: u32 = 0x4000_0000;
@@ -21,6 +22,8 @@ const DS_MODALFRAME: u32 = 0x80;
 const BS_AUTOCHECKBOX: u32 = 0x3;
 const BS_DEFPUSHBUTTON: u32 = 0x1;
 const ES_AUTOHSCROLL: u32 = 0x80;
+const WS_VSCROLL: u32 = 0x0020_0000;
+const CBS_DROPDOWNLIST: u32 = 0x3;
 
 /// Builds an in-memory classic `DLGTEMPLATE` (+ items). Pure and unit-testable.
 pub(super) struct DlgBuilder {
@@ -139,7 +142,7 @@ pub(super) fn build_template() -> Vec<u8> {
         40,
         40,
         250,
-        296,
+        312,
         "RustShot Settings",
         9,
         "Segoe UI",
@@ -206,17 +209,28 @@ pub(super) fn build_template() -> Vec<u8> {
         "Save screenshots as JPEG (else PNG)",
     );
 
+    // Which microphone "Record microphone" uses (a drop-down list; its height is the open list).
     b.item(
         stat,
         10,
         96,
-        90,
+        55,
         10,
-        0xFFFF,
+        LABEL_MIC as u16,
         ATOM_STATIC,
-        "JPEG quality (1-100):",
+        "Microphone:",
     );
-    b.item(edit, 105, 94, 40, 12, EDIT_QUALITY as u16, ATOM_EDIT, "");
+    b.item(
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
+        65,
+        94,
+        175,
+        120,
+        COMBO_MIC as u16,
+        ATOM_COMBOBOX,
+        "",
+    );
+
     b.item(
         stat,
         10,
@@ -225,25 +239,36 @@ pub(super) fn build_template() -> Vec<u8> {
         10,
         0xFFFF,
         ATOM_STATIC,
+        "JPEG quality (1-100):",
+    );
+    b.item(edit, 105, 110, 40, 12, EDIT_QUALITY as u16, ATOM_EDIT, "");
+    b.item(
+        stat,
+        10,
+        128,
+        90,
+        10,
+        0xFFFF,
+        ATOM_STATIC,
         "Video frame rate (fps):",
     );
-    b.item(edit, 105, 110, 40, 12, EDIT_FPS as u16, ATOM_EDIT, "");
+    b.item(edit, 105, 126, 40, 12, EDIT_FPS as u16, ATOM_EDIT, "");
 
     b.item(
         stat,
         10,
-        130,
+        146,
         190,
         10,
         0xFFFF,
         ATOM_STATIC,
         "Output folder:",
     );
-    b.item(edit, 10, 142, 140, 13, EDIT_FOLDER as u16, ATOM_EDIT, "");
+    b.item(edit, 10, 158, 140, 13, EDIT_FOLDER as u16, ATOM_EDIT, "");
     b.item(
         btn,
         155,
-        141,
+        157,
         45,
         14,
         BTN_BROWSE as u16,
@@ -255,7 +280,7 @@ pub(super) fn build_template() -> Vec<u8> {
     b.item(
         stat,
         10,
-        162,
+        178,
         230,
         10,
         0xFFFF,
@@ -263,7 +288,7 @@ pub(super) fn build_template() -> Vec<u8> {
         "Global hotkeys (e.g. Ctrl+Shift+R; blank = off):",
     );
     for (i, label) in HK_LABELS.iter().enumerate() {
-        let y = 176 + (i as i16) * 15;
+        let y = 192 + (i as i16) * 15;
         b.item(stat, 10, y, 85, 10, 0xFFFF, ATOM_STATIC, label);
         b.item(
             edit,
@@ -290,7 +315,7 @@ pub(super) fn build_template() -> Vec<u8> {
     b.item(
         btn,
         10,
-        272,
+        288,
         110,
         14,
         BTN_RESTORE_HK as u16,
@@ -300,7 +325,7 @@ pub(super) fn build_template() -> Vec<u8> {
     b.item(
         btn | BS_DEFPUSHBUTTON,
         148,
-        272,
+        288,
         45,
         15,
         IDOK.0 as u16,
@@ -310,7 +335,7 @@ pub(super) fn build_template() -> Vec<u8> {
     b.item(
         btn,
         200,
-        272,
+        288,
         45,
         15,
         IDCANCEL.0 as u16,

@@ -193,6 +193,13 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Microphone picker in Settings (group 3, decision 1): a drop-down of "System
+  default (current default)" plus the connected microphones, built with the recorder's own
+  matching rule (`recorder::find_input`), storing the device name in `microphone_device`; a
+  configured but disconnected device is kept as "not connected"; greyed out while "Record
+  microphone" is off. Template +2 controls (37), 3 new unit tests (175 total);
+  `settings-selftest` renders it with 2 entries. Not driven by hand: the tray was in use for the
+  hardware checks.
 - 2026-10-23: **Release 0.1.6** (tag `v0.1.6`): the app crate refactor (review item 7, two
   binaries: `rustshot.exe` ships, `rustshot-dev.exe` is for development) and the small fixes
   (config bounds and `schema_version`, overlay focus for delayed shots, Settings taskbar
