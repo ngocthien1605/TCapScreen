@@ -61,7 +61,7 @@ struct FlyoutInner {
     /// DPI the flyout was laid out for.
     dpi: u32,
     /// Button font at that DPI (kept alive as long as the buttons).
-    _font: Option<crate::dpi::UiFont>,
+    _font: Option<crate::platform::dpi::UiFont>,
 }
 
 /// A live flyout window. Dropping it destroys the window.
@@ -77,8 +77,8 @@ impl Flyout {
         ensure_class()?;
 
         // Appear on the monitor the user is working on, in its work area (clear of the taskbar).
-        let (work, dpi) = crate::dpi::cursor_monitor();
-        let px = |v: i32| crate::dpi::scale(v, dpi);
+        let (work, dpi) = crate::platform::dpi::cursor_monitor();
+        let px = |v: i32| crate::platform::dpi::scale(v, dpi);
         let thumb = imaging::thumbnail(img, px(300) as u32);
         let (tw, th) = (thumb.width() as i32, thumb.height() as i32);
         let thumb_bgra = rgba_to_bgra(thumb.as_raw());
@@ -90,7 +90,7 @@ impl Flyout {
             thumb_w: tw,
             thumb_h: th,
             dpi,
-            _font: crate::dpi::UiFont::new(dpi),
+            _font: crate::platform::dpi::UiFont::new(dpi),
         });
 
         // SAFETY: standard top-most tool window creation; CREATESTRUCT carries the inner ptr.
@@ -213,7 +213,11 @@ fn ensure_class() -> Result<()> {
     }
 }
 
-fn create_buttons(parent: HWND, dpi: u32, font: Option<&crate::dpi::UiFont>) -> Result<()> {
+fn create_buttons(
+    parent: HWND,
+    dpi: u32,
+    font: Option<&crate::platform::dpi::UiFont>,
+) -> Result<()> {
     let labels = [
         (ID_ANNOTATE, w!("Annotate")),
         (ID_OPEN, w!("Open")),
@@ -222,7 +226,7 @@ fn create_buttons(parent: HWND, dpi: u32, font: Option<&crate::dpi::UiFont>) -> 
         (ID_PATH, w!("Path")),
         (ID_DELETE, w!("Delete")),
     ];
-    let px = |v: i32| crate::dpi::scale(v, dpi);
+    let px = |v: i32| crate::platform::dpi::scale(v, dpi);
     let (bw, bh, gap, x0, y) = (px(76), px(28), px(4), px(12), px(WIN_H - 40));
     // SAFETY: standard BUTTON child-window creation.
     unsafe {
@@ -344,7 +348,7 @@ fn paint(hwnd: HWND, inner: &FlyoutInner) {
         let _ = DeleteObject(HGDIOBJ(bg.0));
 
         // Fit the thumbnail into the preview area, preserving aspect ratio.
-        let px = |v: i32| crate::dpi::scale(v, inner.dpi);
+        let px = |v: i32| crate::platform::dpi::scale(v, inner.dpi);
         let (area_w, area_h) = (client.right - px(24), client.bottom - px(60));
         let (tw, th) = (inner.thumb_w.max(1), inner.thumb_h.max(1));
         let scale = (area_w as f64 / tw as f64)

@@ -47,7 +47,7 @@ struct ToolbarInner {
     start: Instant,
     dpi: u32,
     /// Label and button font at `dpi`.
-    font: Option<crate::dpi::UiFont>,
+    font: Option<crate::platform::dpi::UiFont>,
 }
 
 /// The toolbar window. Dropping it destroys the window.
@@ -62,13 +62,13 @@ impl Toolbar {
     pub fn show(dispatch_hwnd: HWND) -> Result<Toolbar> {
         ensure_class()?;
         // Top centre of the monitor the user is working on.
-        let (work, dpi) = crate::dpi::cursor_monitor();
-        let px = |v: i32| crate::dpi::scale(v, dpi);
+        let (work, dpi) = crate::platform::dpi::cursor_monitor();
+        let px = |v: i32| crate::platform::dpi::scale(v, dpi);
         let mut inner = Box::new(ToolbarInner {
             dispatch_hwnd,
             start: Instant::now(),
             dpi,
-            font: crate::dpi::UiFont::new(dpi),
+            font: crate::platform::dpi::UiFont::new(dpi),
         });
 
         // SAFETY: standard top-most tool-window creation; CREATESTRUCT carries the inner ptr.
@@ -137,9 +137,9 @@ fn create_button(
     label: PCWSTR,
     x: i32,
     dpi: u32,
-    font: Option<&crate::dpi::UiFont>,
+    font: Option<&crate::platform::dpi::UiFont>,
 ) -> Result<HWND> {
-    let px = |v: i32| crate::dpi::scale(v, dpi);
+    let px = |v: i32| crate::platform::dpi::scale(v, dpi);
     // SAFETY: standard BUTTON child-window creation.
     unsafe {
         let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
@@ -278,7 +278,7 @@ fn paint(hwnd: HWND, inner: &ToolbarInner) {
             .font
             .as_ref()
             .map(|f| SelectObject(hdc, HGDIOBJ(f.0 .0)));
-        let px = |v: i32| crate::dpi::scale(v, inner.dpi);
+        let px = |v: i32| crate::platform::dpi::scale(v, inner.dpi);
         let _ = TextOutW(hdc, px(12), px(20), &wide);
         if let Some(o) = old {
             SelectObject(hdc, o);

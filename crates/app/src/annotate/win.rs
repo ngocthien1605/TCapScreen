@@ -17,13 +17,12 @@ use imaging::Rgba;
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW,
-    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GdiFlush,
-    GetStockObject, IntersectClipRect, InvalidateRect, Rectangle, ReleaseDC, RestoreDC, SaveDC,
-    SelectObject, SetBkMode, SetStretchBltMode, SetTextColor, StretchBlt, BITMAPINFO,
-    BITMAPINFOHEADER, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS,
-    DT_NOPREFIX, DT_WORDBREAK, HALFTONE, HBITMAP, HDC, HGDIOBJ, HOLLOW_BRUSH, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, PS_INSIDEFRAME, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW,
+    EndPaint, FillRect, GdiFlush, GetStockObject, IntersectClipRect, InvalidateRect, Rectangle,
+    RestoreDC, SaveDC, SelectObject, SetBkMode, SetStretchBltMode, SetTextColor, StretchBlt,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_NOPREFIX, DT_WORDBREAK, HALFTONE,
+    HDC, HGDIOBJ, HOLLOW_BRUSH, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_INSIDEFRAME, SRCCOPY,
+    TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::CheckRadioButton;
@@ -41,6 +40,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT, WM_SIZE,
     WM_SYSKEYDOWN, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
+
+use crate::platform::gdi::{ScreenDc, Surface};
 
 use super::model::{
     enter_action, font_px, Editor, EnterAction, EscapeResult, Item, Tool, Typing, View,
@@ -85,10 +86,8 @@ const WS_GROUP: u32 = 0x0002_0000;
 struct Ctx {
     editor: Editor,
     image: Rgba,
-    /// The screenshot as a DIB section selected into `src_dc`, for fast scaled blits.
-    src_dc: HDC,
-    src_bmp: HBITMAP,
-    src_old: HGDIOBJ,
+    /// The screenshot as a DIB-backed memory DC, for fast scaled blits.
+    src: Surface,
     source: PathBuf,
     /// Last view mapping computed by layout.
     view: View,
@@ -99,18 +98,7 @@ struct Ctx {
     /// DPI of the monitor the window is on; layout lengths are scaled by it.
     dpi: u32,
     /// Toolbar font at `dpi`.
-    font: Option<crate::dpi::UiFont>,
-}
-
-impl Drop for Ctx {
-    fn drop(&mut self) {
-        // SAFETY: restore the DC's original object, then free the bitmap and the DC we created.
-        unsafe {
-            SelectObject(self.src_dc, self.src_old);
-            let _ = DeleteObject(HGDIOBJ(self.src_bmp.0));
-            let _ = DeleteDC(self.src_dc);
-        }
-    }
+    font: Option<crate::platform::dpi::UiFont>,
 }
 
 thread_local! {
@@ -133,25 +121,23 @@ fn try_open(path: &Path) -> Result<()> {
     let image = imaging::load_rgba(path).context("loading the screenshot")?;
     let (iw, ih) = (image.width() as i32, image.height() as i32);
 
-    let (src_dc, src_bmp, src_old) = make_source_dc(&image)?;
+    let src = make_source_dc(&image)?;
     let ctx = Box::new(Ctx {
         editor: Editor::new(iw, ih),
         image,
-        src_dc,
-        src_bmp,
-        src_old,
+        src,
         source: path.to_path_buf(),
         view: View::IDENTITY,
         dirty: false,
         high_surrogate: None,
-        dpi: crate::dpi::BASE,
+        dpi: crate::platform::dpi::BASE,
         font: None,
     });
 
     // Size the window to the image where it fits, bounded by the work area of the monitor the
     // user is on, and centre it there.
-    let (work, dpi) = crate::dpi::cursor_monitor();
-    let px = |v: i32| crate::dpi::scale(v, dpi);
+    let (work, dpi) = crate::platform::dpi::cursor_monitor();
+    let px = |v: i32| crate::platform::dpi::scale(v, dpi);
     // SAFETY: plain metric queries and window creation. The window adopts `ctx` in
     // WM_NCCREATE (via PENDING) and frees it in WM_NCDESTROY.
     let created = unsafe {
@@ -273,7 +259,7 @@ fn create_toolbar(parent: HWND) -> Result<()> {
         }
         let _ = CheckRadioButton(parent, ID_RECT, ID_TEXT, ID_RECT);
     }
-    set_dpi(parent, crate::dpi::of_window(parent));
+    set_dpi(parent, crate::platform::dpi::of_window(parent));
     Ok(())
 }
 
@@ -284,9 +270,9 @@ fn set_dpi(hwnd: HWND, dpi: u32) {
         return;
     };
     ctx.dpi = dpi;
-    ctx.font = crate::dpi::UiFont::new(dpi);
+    ctx.font = crate::platform::dpi::UiFont::new(dpi);
     let font = ctx.font.as_ref().map(|f| f.0);
-    let px = |v: i32| crate::dpi::scale(v, dpi);
+    let px = |v: i32| crate::platform::dpi::scale(v, dpi);
     // SAFETY: repositions and refonts our own child buttons.
     unsafe {
         for (id, _, x, width, _) in BUTTONS {
@@ -562,7 +548,7 @@ fn relayout(hwnd: HWND, ctx: &mut Ctx) {
     unsafe {
         let _ = GetClientRect(hwnd, &mut rc);
     }
-    let px = |v: i32| crate::dpi::scale(v, ctx.dpi);
+    let px = |v: i32| crate::platform::dpi::scale(v, ctx.dpi);
     let (margin, bar) = (px(MARGIN), px(TOOLBAR_H));
     let area = Rect::new(
         margin,
@@ -592,9 +578,11 @@ fn paint(hwnd: HWND, ctx: &mut Ctx) {
         let _ = GetClientRect(hwnd, &mut rc);
         let (cw, ch) = (rc.right.max(1), rc.bottom.max(1));
 
-        let back = CreateCompatibleDC(Some(hdc));
-        let bmp = CreateCompatibleBitmap(hdc, cw, ch);
-        let old = SelectObject(back, HGDIOBJ(bmp.0));
+        let Ok(buffer) = Surface::compatible(hdc, cw, ch) else {
+            let _ = EndPaint(hwnd, &ps);
+            return;
+        };
+        let back = buffer.dc;
 
         let bg = CreateSolidBrush(COLORREF(0x0030_2C2A));
         FillRect(back, &rc, bg);
@@ -609,7 +597,7 @@ fn paint(hwnd: HWND, ctx: &mut Ctx) {
             v.oy,
             v.px(iw),
             v.px(ih),
-            Some(ctx.src_dc),
+            Some(ctx.src.dc),
             0,
             0,
             iw,
@@ -630,9 +618,7 @@ fn paint(hwnd: HWND, ctx: &mut Ctx) {
         let _ = RestoreDC(back, saved);
 
         let _ = BitBlt(hdc, 0, 0, cw, ch, Some(back), 0, 0, SRCCOPY);
-        SelectObject(back, old);
-        let _ = DeleteObject(HGDIOBJ(bmp.0));
-        let _ = DeleteDC(back);
+        drop(buffer);
         let _ = EndPaint(hwnd, &ps);
     }
 }
@@ -739,84 +725,38 @@ fn draw_text(hdc: HDC, rect: Rect, text: &str, view: View) {
 // DIBs and export
 // ----------------------------------------------------------------------------------------------
 
-/// Create a top-down 32-bit DIB section the size of `img`, filled with its pixels, selected into a
-/// new memory DC. Returns `(dc, bitmap, previously-selected object)`; the caller cleans up.
-fn make_source_dc(img: &Rgba) -> Result<(HDC, HBITMAP, HGDIOBJ)> {
-    let (w, h) = (img.width() as i32, img.height() as i32);
-    let mut bmi = BITMAPINFO::default();
-    bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-    bmi.bmiHeader.biWidth = w;
-    bmi.bmiHeader.biHeight = -h;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = 0; // BI_RGB
-
-    // SAFETY: DIB section creation; `bits` points at w*h*4 bytes owned by the bitmap, which we
-    // fill before use. Failures clean up what was created.
-    unsafe {
-        let screen = windows::Win32::Graphics::Gdi::GetDC(None);
-        let mut bits: *mut c_void = null_mut();
-        let bmp = CreateDIBSection(Some(screen), &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
-        let bmp = match bmp {
-            Ok(b) if !bits.is_null() => b,
-            Ok(b) => {
-                ReleaseDC(None, screen);
-                let _ = DeleteObject(HGDIOBJ(b.0));
-                return Err(anyhow!("CreateDIBSection returned no pixel buffer"));
-            }
-            Err(e) => {
-                ReleaseDC(None, screen);
-                return Err(anyhow!("CreateDIBSection failed: {e}"));
-            }
-        };
-        let dc = CreateCompatibleDC(Some(screen));
-        ReleaseDC(None, screen);
-        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w as usize) * (h as usize) * 4);
-        let (dst_px, _) = dst.as_chunks_mut::<4>();
-        let (src_px, _) = img.as_raw().as_chunks::<4>();
-        for (d, s) in dst_px.iter_mut().zip(src_px) {
-            d[0] = s[2];
-            d[1] = s[1];
-            d[2] = s[0];
-            d[3] = 255;
-        }
-        let old = SelectObject(dc, HGDIOBJ(bmp.0));
-        Ok((dc, bmp, old))
+/// The screenshot as a DIB-backed memory DC (top-down BGRA, opaque).
+fn make_source_dc(img: &Rgba) -> Result<Surface> {
+    let screen = ScreenDc::get()?;
+    let mut surface = Surface::dib(screen.0, img.width() as i32, img.height() as i32)?;
+    let dst = surface
+        .pixels_mut()
+        .ok_or_else(|| anyhow!("CreateDIBSection returned no pixel buffer"))?;
+    let (dst_px, _) = dst.as_chunks_mut::<4>();
+    let (src_px, _) = img.as_raw().as_chunks::<4>();
+    for (d, s) in dst_px.iter_mut().zip(src_px) {
+        *d = [s[2], s[1], s[0], 255];
     }
+    Ok(surface)
 }
 
 /// Render `items` onto a copy of `img` at full resolution (what Save/Copy produce).
 pub fn render(img: &Rgba, items: &[Item]) -> Result<Rgba> {
-    let (dc, bmp, old) = make_source_dc(img)?;
-    let (w, h) = (img.width(), img.height());
-    // SAFETY: draw into our DIB-backed DC, flush GDI, then copy the pixels back out before the
-    // objects are released.
-    let out = unsafe {
-        paint_items(dc, items, None, None, View::IDENTITY);
-        let _ = GdiFlush();
-        let mut bits_bmp = windows::Win32::Graphics::Gdi::BITMAP::default();
-        windows::Win32::Graphics::Gdi::GetObjectW(
-            HGDIOBJ(bmp.0),
-            std::mem::size_of::<windows::Win32::Graphics::Gdi::BITMAP>() as i32,
-            Some(&mut bits_bmp as *mut _ as *mut c_void),
-        );
-        let src = std::slice::from_raw_parts(
-            bits_bmp.bmBits as *const u8,
-            (w as usize) * (h as usize) * 4,
-        );
-        let mut rgba = Vec::with_capacity(src.len());
-        for p in src.as_chunks::<4>().0 {
-            rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
-        }
-        rgba
-    };
-    // SAFETY: release the GDI objects we created above.
+    let surface = make_source_dc(img)?;
+    // SAFETY: draw into our DIB-backed DC, then flush GDI so the pixels are complete.
     unsafe {
-        SelectObject(dc, old);
-        let _ = DeleteObject(HGDIOBJ(bmp.0));
-        let _ = DeleteDC(dc);
+        paint_items(surface.dc, items, None, None, View::IDENTITY);
+        let _ = GdiFlush();
     }
-    Rgba::from_raw(w, h, out).ok_or_else(|| anyhow!("rendered buffer had the wrong size"))
+    let src = surface
+        .pixels()
+        .ok_or_else(|| anyhow!("rendered surface has no pixels"))?;
+    let mut rgba = Vec::with_capacity(src.len());
+    for p in src.as_chunks::<4>().0 {
+        rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
+    }
+    Rgba::from_raw(img.width(), img.height(), rgba)
+        .ok_or_else(|| anyhow!("rendered buffer had the wrong size"))
 }
 
 /// Where an annotated copy goes: the original's folder and `<stem>_annotated.<ext>`, which

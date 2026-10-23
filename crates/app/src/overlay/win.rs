@@ -14,14 +14,13 @@ use std::sync::Once;
 use anyhow::{Context, Result};
 use capture_core::{Frame, Point, Rect, WindowInfo};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection,
-    CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect,
-    GetStockObject, GetTextExtentPoint32W, InvalidateRect, Rectangle, ReleaseDC, SelectObject,
-    SetBkColor, SetBkMode, SetTextColor, TextOutW, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER,
-    BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, HBRUSH,
-    HDC, HGDIOBJ, HOLLOW_BRUSH, OPAQUE, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY,
+    AlphaBlend, BeginPaint, BitBlt, CreateFontW, CreatePen, CreateSolidBrush, EndPaint, FillRect,
+    GetStockObject, GetTextExtentPoint32W, InvalidateRect, Rectangle, SelectObject, SetBkColor,
+    SetBkMode, SetTextColor, TextOutW, AC_SRC_OVER, BLENDFUNCTION, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, HBRUSH, HOLLOW_BRUSH, OPAQUE, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, PS_SOLID, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
@@ -35,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::state::{crosshair_bars, label_position, Outcome, SelectionState};
+use crate::platform::gdi::{copy_frame, GdiObj, ScreenDc, Surface};
 
 const CLASS_NAME: PCWSTR = w!("RustShotOverlay");
 static REGISTER: Once = Once::new();
@@ -389,12 +389,7 @@ fn draw_crosshair(ctx: &OverlayCtx, g: &Gdi) {
         (0, HBRUSH(g.line_brush.0 .0)),
     ] {
         for bar in crosshair_bars(c, ctx.width, ctx.height, grow) {
-            let r = RECT {
-                left: bar.x,
-                top: bar.y,
-                right: bar.right(),
-                bottom: bar.bottom(),
-            };
+            let r = crate::platform::win_rect(bar);
             // SAFETY: fills a rectangle in our back-buffer DC with a brush we own; GDI clips it.
             unsafe {
                 FillRect(g.back.dc, &r, brush);
@@ -454,8 +449,13 @@ struct Gdi {
 impl Gdi {
     fn new(frozen: &Frame, w: i32, h: i32) -> Result<Gdi> {
         let screen_dc = ScreenDc::get()?;
-        let screen = Surface::dib(screen_dc.0, w, h, Some(frozen))?;
-        let dim = Surface::dib(screen_dc.0, 1, 1, None)?;
+        // A display change between the freeze and now may leave the frame smaller than the
+        // overlay: `copy_frame` clips, and the uncovered part stays black.
+        let mut screen = Surface::dib(screen_dc.0, w, h)?;
+        if let Some(px) = screen.pixels_mut() {
+            copy_frame(frozen, px, w.max(0) as usize * 4);
+        }
+        let dim = Surface::dib(screen_dc.0, 1, 1)?;
         let back = Surface::compatible(screen_dc.0, w, h)?;
         drop(screen_dc);
 
@@ -495,168 +495,5 @@ impl Gdi {
             edge_brush,
             font,
         })
-    }
-}
-
-/// The screen DC, released on drop.
-struct ScreenDc(HDC);
-
-impl ScreenDc {
-    fn get() -> Result<ScreenDc> {
-        // SAFETY: GetDC(NULL) returns the screen DC or null.
-        let dc = unsafe { windows::Win32::Graphics::Gdi::GetDC(None) };
-        anyhow::ensure!(!dc.is_invalid(), "GetDC failed");
-        Ok(ScreenDc(dc))
-    }
-}
-
-impl Drop for ScreenDc {
-    fn drop(&mut self) {
-        // SAFETY: obtained from GetDC(NULL) above.
-        unsafe { ReleaseDC(None, self.0) };
-    }
-}
-
-/// A GDI object (pen, brush, font, bitmap), deleted on drop.
-struct GdiObj(HGDIOBJ);
-
-impl GdiObj {
-    fn new(raw: *mut c_void) -> Result<GdiObj> {
-        anyhow::ensure!(!raw.is_null(), "GDI object creation failed");
-        Ok(GdiObj(HGDIOBJ(raw)))
-    }
-}
-
-impl Drop for GdiObj {
-    fn drop(&mut self) {
-        // SAFETY: we created this object and it is no longer selected into a DC (the owning
-        // `Surface` restores its DC's original object before the bitmap is deleted).
-        unsafe {
-            let _ = DeleteObject(self.0);
-        }
-    }
-}
-
-/// A memory DC with a bitmap selected into it. Dropping restores the DC's original object, then
-/// deletes the DC and the bitmap.
-struct Surface {
-    dc: HDC,
-    old: HGDIOBJ,
-    _bitmap: GdiObj,
-}
-
-impl Surface {
-    /// Select `bitmap` into a fresh memory DC compatible with `ref_dc`.
-    fn select(ref_dc: HDC, bitmap: GdiObj) -> Result<Surface> {
-        // SAFETY: a memory DC compatible with the reference DC.
-        let dc = unsafe { CreateCompatibleDC(Some(ref_dc)) };
-        anyhow::ensure!(!dc.is_invalid(), "CreateCompatibleDC failed");
-        // SAFETY: select the bitmap into its own DC.
-        let old = unsafe { SelectObject(dc, bitmap.0) };
-        Ok(Surface {
-            dc,
-            old,
-            _bitmap: bitmap,
-        })
-    }
-
-    /// A device-compatible bitmap of `w`×`h` (the back buffer).
-    fn compatible(ref_dc: HDC, w: i32, h: i32) -> Result<Surface> {
-        // SAFETY: plain bitmap creation.
-        let bmp = unsafe { CreateCompatibleBitmap(ref_dc, w, h) };
-        Surface::select(ref_dc, GdiObj::new(bmp.0)?)
-    }
-
-    /// A top-down 32-bpp DIB section, optionally filled with a frozen frame's pixels (BGRA,
-    /// stride-aware). Rows or columns the frame doesn't cover — the display layout changed
-    /// between the freeze and the overlay — stay black instead of being read out of bounds.
-    fn dib(ref_dc: HDC, w: i32, h: i32, src: Option<&Frame>) -> Result<Surface> {
-        let mut bmi = BITMAPINFO::default();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bmi.bmiHeader.biWidth = w;
-        bmi.bmiHeader.biHeight = -h; // negative = top-down, matching our frame layout
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = 0; // BI_RGB
-
-        let mut bits: *mut c_void = null_mut();
-        // SAFETY: valid BITMAPINFO; `bits` receives the pixel pointer.
-        let bmp = unsafe {
-            CreateDIBSection(Some(ref_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-                .context("CreateDIBSection")?
-        };
-        let bitmap = GdiObj::new(bmp.0)?;
-        anyhow::ensure!(!bits.is_null(), "CreateDIBSection returned no pixels");
-        let row = w.max(0) as usize * 4;
-        // SAFETY: a w×h 32-bpp top-down DIB section has exactly `row * h` bytes at `bits`, and
-        // nothing else references them yet.
-        let dst =
-            unsafe { std::slice::from_raw_parts_mut(bits as *mut u8, row * h.max(0) as usize) };
-        dst.fill(0);
-        if let Some(f) = src {
-            copy_frame(f, dst, row);
-        }
-        Surface::select(ref_dc, bitmap)
-    }
-}
-
-impl Drop for Surface {
-    fn drop(&mut self) {
-        // SAFETY: restore the original object, then delete the DC; the bitmap (no longer
-        // selected) is deleted by its `GdiObj` right after.
-        unsafe {
-            SelectObject(self.dc, self.old);
-            let _ = DeleteDC(self.dc);
-        }
-    }
-}
-
-/// Copy `f` into a tightly packed BGRA buffer `row` bytes wide, clipping to whichever is
-/// smaller. Uncovered parts of `dst` are left as they are.
-fn copy_frame(f: &Frame, dst: &mut [u8], row: usize) {
-    if row == 0 {
-        return;
-    }
-    for (y, out) in dst.chunks_exact_mut(row).enumerate() {
-        let Some(src) = f.row(y as u32) else {
-            break;
-        };
-        let n = src.len().min(out.len());
-        out[..n].copy_from_slice(&src[..n]);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn frame(w: u32, h: u32, stride: usize, fill: u8) -> Frame {
-        Frame {
-            data: vec![fill; stride * h as usize],
-            width: w,
-            height: h,
-            stride,
-            format: capture_core::PixelFmt::Bgra8,
-            timestamp: std::time::Duration::ZERO,
-        }
-    }
-
-    #[test]
-    fn copy_frame_clips_a_frame_smaller_than_the_overlay() {
-        // Overlay 4×3, frozen frame only 2×2 (the display shrank): no overrun, rest stays 0.
-        let mut dst = vec![0u8; 4 * 4 * 3];
-        copy_frame(&frame(2, 2, 2 * 4 + 8, 7), &mut dst, 4 * 4);
-        for (y, row) in dst.as_chunks::<16>().0.iter().enumerate() {
-            let expect_lit = if y < 2 { 8 } else { 0 };
-            assert!(row[..expect_lit].iter().all(|&b| b == 7), "row {y}");
-            assert!(row[expect_lit..].iter().all(|&b| b == 0), "row {y}");
-        }
-    }
-
-    #[test]
-    fn copy_frame_crops_a_frame_larger_than_the_overlay() {
-        let mut dst = vec![0u8; 2 * 4 * 2];
-        copy_frame(&frame(5, 5, 5 * 4, 9), &mut dst, 2 * 4);
-        assert!(dst.iter().all(|&b| b == 9));
     }
 }
