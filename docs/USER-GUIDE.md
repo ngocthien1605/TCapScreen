@@ -5,8 +5,9 @@ tray. It captures regions, windows, monitors, or the whole desktop, and records 
 animated GIFs with optional audio.
 
 This is the compact reference. For a step-by-step walkthrough (installing, each task, updating,
-uninstalling) see the Manual Guide, in [English](MANUAL-GUIDE.md) or
-[Vietnamese](MANUAL-GUIDE.vi.md). This guide describes RustShot 0.1.7.
+uninstalling) see the Manual Guide, in
+[English](https://github.com/ngocthien1605/rustshot/blob/master/docs/MANUAL-GUIDE.md) or
+[Vietnamese](https://github.com/ngocthien1605/rustshot/blob/master/docs/MANUAL-GUIDE.vi.md). This guide describes RustShot 0.1.7.
 
 ## Getting started
 

@@ -29,7 +29,8 @@ RustShot là bản portable: không có trình cài đặt, không cần quyền
 1. Mở [trang Releases](https://github.com/ngocthien1605/rustshot/releases) và tải file
    `RustShot-<phiên bản>-portable-x64.zip` của bản mới nhất.
 2. *(Không bắt buộc)* Kiểm tra file tải về: cạnh file zip có file `.sha256` chứa mã SHA-256.
-   Trong PowerShell, lệnh `Get-FileHash .\RustShot-0.1.7-portable-x64.zip` phải in ra đúng mã đó.
+   Trong PowerShell, lệnh `Get-FileHash .\RustShot-0.1.7-portable-x64.zip` phải in ra đúng mã đó
+   (chữ hoa hay chữ thường không quan trọng).
 3. Giải nén vào một thư mục cố định, ví dụ `%LOCALAPPDATA%\Programs\RustShot`. Trong zip có
    `rustshot.exe`, `USER-GUIDE.md` và `LICENSE`.
 4. Nhấp đúp vào `rustshot.exe`.

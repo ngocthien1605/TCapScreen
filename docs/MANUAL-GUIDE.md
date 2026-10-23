@@ -29,7 +29,7 @@ RustShot is portable: there is no installer and it does not need administrator r
    `RustShot-<version>-portable-x64.zip` from the newest release.
 2. *(Optional)* Check the download: next to the zip is a `.sha256` file holding its SHA-256
    hash. In PowerShell, `Get-FileHash .\RustShot-0.1.7-portable-x64.zip` must print the same
-   value.
+   value (letter case doesn't matter).
 3. Unzip it to a folder that will stay put, for example `%LOCALAPPDATA%\Programs\RustShot`.
    The zip holds `rustshot.exe`, `USER-GUIDE.md` and `LICENSE`.
 4. Double-click `rustshot.exe`.

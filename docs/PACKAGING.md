@@ -32,9 +32,9 @@ Releases are built and published by GitHub Actions (`.github/workflows/release.y
    git push origin vX.Y.Z
    ```
 
-   `--cleanup=verbatim` keeps the `###` heading lines: with a cleanup mode that strips comments
-   (the default when git opens an editor for the message), lines starting with `#` would be
-   dropped from the notes.
+   `--cleanup=verbatim` is required: `git tag` cleans messages in `strip` mode by default, even
+   with `-F` or `-m`, which deletes every line starting with `#`, so the `###` headings would
+   vanish from the release notes.
 
 3. The workflow re-runs the gate (fmt, clippy, tests, cargo-deny), fails unless the tag equals
    `v<workspace version>`, builds the portable zip with `scripts/build-portable.ps1`, writes
