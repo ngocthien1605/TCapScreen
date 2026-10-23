@@ -52,8 +52,16 @@ pub fn dev_commands_moved() -> ExitCode {
 /// Start the tray application.
 pub fn run_tray() -> ExitCode {
     // Logging first so everything after is captured; then the panic hook, which relies on it.
-    let logs_dir = config::paths::logs_dir().ok();
-    let _log_guard = logs_dir.as_deref().and_then(logging::init);
+    // Without a log directory (no %APPDATA%) there is still a subscriber, so the warnings below
+    // are not silently dropped.
+    let _log_guard = match config::paths::logs_dir() {
+        Ok(dir) => logging::init(&dir),
+        Err(e) => {
+            logging::init_stderr();
+            tracing::warn!("no log directory ({e}); logging to stderr only");
+            None
+        }
+    };
     panic_guard::install_hook();
 
     // Enforce a single instance.
@@ -132,15 +140,16 @@ fn start() -> anyhow::Result<()> {
     // Create the dispatch window (owns app state), the tray, and the global hotkeys. Each must
     // stay alive for the whole message loop.
     let dispatch_hwnd = dispatch::create(settings.clone(), output_folder)?;
-    let _tray = ui::tray::build(dispatch_hwnd)?;
+    let tray = ui::tray::build(dispatch_hwnd)?;
     let hotkeys = hotkeys::register(&settings.hotkeys, dispatch_hwnd);
-    if let Some(hk) = &hotkeys {
-        // A key held by another app (Snipping Tool, another capture tool) is a permanent
-        // condition on that machine, so at startup it goes to the tooltip and the log rather
-        // than a dialog on every login; Settings → OK reports it in a dialog.
-        let _ = _tray.set_tooltip(Some(hk.tooltip()));
-    }
-    dispatch::with_app(|app| app.hotkeys = hotkeys);
+    dispatch::with_app(|app| {
+        app.hotkeys = hotkeys;
+        app.tray = Some(tray);
+    });
+    // A key held by another app (Snipping Tool, another capture tool) is a permanent condition
+    // on that machine, so at startup it goes to the tooltip and the log rather than a dialog on
+    // every login; Settings → OK reports it in a dialog (and refreshes the tooltip).
+    dispatch::refresh_tray_tooltip();
 
     // Startup notices go last, once the tray icon is up, so the user can see the app is
     // running while the (message-pumping) box is open. The gate is held meanwhile so a hotkey

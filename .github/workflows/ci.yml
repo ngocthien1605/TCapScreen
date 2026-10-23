@@ -16,7 +16,7 @@ jobs:
   check:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-rust
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -40,7 +40,7 @@ jobs:
         shell: pwsh
         run: pwsh -File scripts/build-portable.ps1
       - name: Upload portable zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rustshot-portable
           path: dist/*.zip
@@ -51,7 +51,7 @@ jobs:
   msrv:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the minimum supported Rust
         shell: pwsh
         run: |

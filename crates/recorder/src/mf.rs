@@ -29,6 +29,9 @@ const MF_VERSION: u32 = 0x0002_0070;
 static MF_STARTUP: Once = Once::new();
 
 fn mf(e: windows::core::Error) -> RecorderError {
+    if crate::hresult_is_disk_full(e.code().0) {
+        return RecorderError::DiskFull;
+    }
     RecorderError::Platform(format!("{e}"))
 }
 

@@ -20,9 +20,14 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [x] `output_folder = "shots"` (relative) → silently reset to the default and persisted, no
       dialog; `output_folder = 'Z:\nope\shots'` (missing drive) → dialog "not usable", captures
       fall back to `Pictures\RustShot`, config left as typed. *(Verified the same way.)*
-- [ ] Tray tooltip reads "RustShot — N hotkey(s) unavailable" at startup when another app holds
-      some keys (code path exercised; the tooltip text itself was not read back; it is not
-      refreshed after a rebind in Settings).
+- [ ] Tray tooltip reads "RustShot — N hotkey(s) unavailable" when another app holds some keys,
+      and updates after Settings → OK or Cancel re-registers them (code path exercised; the
+      tooltip text itself has not been read back).
+- [x] Settings has a taskbar button with the app icon and opens in front; the selection overlay
+      takes keyboard focus even when nothing in RustShot received the last input (a delayed
+      shot), so Esc reaches it. *(Driven with the action posted while a console window had
+      focus: overlay foreground, a real Esc keypress cancelled it; Settings had
+      `WS_EX_APPWINDOW` and the foreground.)*
 - [ ] Settings → OK with a relative folder, or a folder on a missing drive, keeps the dialog
       open with a message; OK with a hotkey another app holds shows a dialog naming it.
 

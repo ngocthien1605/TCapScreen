@@ -112,6 +112,18 @@ pub enum RecorderError {
     EndedEarly { path: PathBuf, reason: String },
 }
 
+/// Win32 error codes meaning the volume is full: `ERROR_HANDLE_DISK_FULL` (39) and
+/// `ERROR_DISK_FULL` (112). Media Foundation reports them wrapped in an `0x8007xxxx` HRESULT.
+pub(crate) fn is_disk_full_code(code: u32) -> bool {
+    matches!(code, 39 | 112)
+}
+
+/// True for `HRESULT_FROM_WIN32` of a disk-full error.
+pub(crate) fn hresult_is_disk_full(hr: i32) -> bool {
+    let hr = hr as u32;
+    hr >> 16 == 0x8007 && is_disk_full_code(hr & 0xFFFF)
+}
+
 /// Result alias for recorder operations.
 pub type Result<T> = std::result::Result<T, RecorderError>;
 
@@ -279,6 +291,22 @@ mod tests {
         assert_eq!(even_dims(1920, 1080), (1920, 1080));
         assert_eq!(even_dims(1235, 629), (1234, 628));
         assert_eq!(even_dims(1, 1), (0, 0));
+    }
+
+    #[test]
+    fn disk_full_is_recognised_in_both_spellings() {
+        assert!(is_disk_full_code(112) && is_disk_full_code(39));
+        assert!(!is_disk_full_code(5));
+        assert!(hresult_is_disk_full(0x8007_0070_u32 as i32));
+        assert!(hresult_is_disk_full(0x8007_0027_u32 as i32));
+        assert!(
+            !hresult_is_disk_full(0x8007_0005_u32 as i32),
+            "access denied"
+        );
+        assert!(
+            !hresult_is_disk_full(0xC00D_0070_u32 as i32),
+            "another facility"
+        );
     }
 
     #[test]

@@ -112,6 +112,22 @@ pub struct AppState {
     pub pending_record: Option<recorder::RecordCfg>,
     /// Registered global hotkeys (kept alive; replaced when settings change them).
     pub hotkeys: Option<crate::hotkeys::Hotkeys>,
+    /// The tray icon (removed from the notification area when dropped).
+    pub tray: Option<tray_icon::TrayIcon>,
+}
+
+/// Set the tray tooltip from the current hotkey state ("N hotkeys unavailable", or idle).
+/// Called at startup and whenever the hotkeys are re-registered.
+pub fn refresh_tray_tooltip() {
+    with_app(|a| {
+        if let Some(tray) = &a.tray {
+            let tip = a
+                .hotkeys
+                .as_ref()
+                .map_or_else(|| "RustShot".to_string(), |h| h.tooltip());
+            let _ = tray.set_tooltip(Some(tip));
+        }
+    });
 }
 
 thread_local! {
@@ -174,6 +190,7 @@ pub fn create(settings: Settings, output_folder: PathBuf) -> Result<HWND> {
             recording: None,
             pending_record: None,
             hotkeys: None,
+            tray: None,
         });
     });
 

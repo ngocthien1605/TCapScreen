@@ -199,8 +199,16 @@ fn gif_loop(cfg: RecordCfg, paused: Arc<AtomicBool>, stopping: Arc<AtomicBool>) 
         .into_iter()
         .map(|(img, n)| (img, Duration::from_nanos(n * 1_000_000_000 / fps as u64)))
         .collect();
-    imaging::save_gif(&timed, &cfg.out_path)
-        .map_err(|e| RecorderError::Platform(format!("gif encode: {e}")))?;
+    imaging::save_gif(&timed, &cfg.out_path).map_err(|e| match &e {
+        imaging::ImagingError::Io { source, .. }
+            if source
+                .raw_os_error()
+                .is_some_and(|c| crate::is_disk_full_code(c as u32)) =>
+        {
+            RecorderError::DiskFull
+        }
+        _ => RecorderError::Platform(format!("gif encode: {e}")),
+    })?;
     match ended_early {
         Some(reason) => Err(RecorderError::EndedEarly {
             path: cfg.out_path,

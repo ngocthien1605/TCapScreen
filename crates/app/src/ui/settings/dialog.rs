@@ -69,6 +69,7 @@ pub fn open() {
         let hwnd = HWND(parent_raw as *mut c_void);
         let hk = crate::hotkeys::register(&draft.initial.hotkeys, hwnd);
         dispatch::with_app(|a| a.hotkeys = hk);
+        dispatch::refresh_tray_tooltip();
     }
 
     // Release the gate only now: `apply` may show notices (a hotkey Windows refused, a folder
@@ -100,7 +101,10 @@ fn apply(new: Settings) {
     // Unregister the old hotkeys first so re-registering the same keys doesn't self-conflict.
     dispatch::with_app(|a| a.hotkeys = None);
     let hk = crate::hotkeys::register(&new.hotkeys, HWND(hwnd_raw as *mut c_void));
-    if let Some(report) = hk.as_ref().and_then(|h| h.unregistered_report()) {
+    let report = hk.as_ref().and_then(|h| h.unregistered_report());
+    dispatch::with_app(|a| a.hotkeys = hk);
+    dispatch::refresh_tray_tooltip();
+    if let Some(report) = report {
         crate::notify::warn("Some hotkeys could not be registered.", report);
     }
     if let Err(e) = crate::startup::apply(new.run_at_startup) {
@@ -123,7 +127,6 @@ fn apply(new: Settings) {
         if let Some(f) = folder {
             a.output_folder = f;
         }
-        a.hotkeys = hk;
     });
     tracing::info!("settings updated");
 }
@@ -222,6 +225,7 @@ unsafe fn dlgproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
                 let draft = &*(lparam.0 as *const Draft);
                 populate(hwnd, &draft.initial);
             }
+            show_in_taskbar(hwnd);
             1
         }
         WM_COMMAND => {
@@ -466,4 +470,36 @@ impl raw_window_handle::HasDisplayHandle for Owner {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Ok(raw_window_handle::DisplayHandle::windows())
     }
+}
+
+/// Give the dialog a taskbar button with the app icon, and bring it to the front. Its owner is
+/// the hidden dispatch window, so without this it has no taskbar entry and is easily lost
+/// behind other windows (a tray app has no main window to find it under). Called before the
+/// dialog is first shown, which is when Windows picks up `WS_EX_APPWINDOW`.
+fn show_in_taskbar(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        LoadIconW, SendMessageW, GWL_EXSTYLE, ICON_BIG, ICON_SMALL, WM_SETICON, WS_EX_APPWINDOW,
+    };
+    // SAFETY: style and icon changes on our own dialog; the icon is a shared resource icon
+    // owned by the module, so it is never destroyed by us.
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_APPWINDOW.0 as isize);
+        if let Ok(module) = GetModuleHandleW(None) {
+            // Resource id 1 is the app icon (app.rc).
+            if let Ok(icon) =
+                LoadIconW(Some(module.into()), PCWSTR(std::ptr::without_provenance(1)))
+            {
+                for size in [ICON_BIG, ICON_SMALL] {
+                    SendMessageW(
+                        hwnd,
+                        WM_SETICON,
+                        Some(WPARAM(size as usize)),
+                        Some(LPARAM(icon.0 as isize)),
+                    );
+                }
+            }
+        }
+    }
+    crate::platform::bring_to_front(hwnd);
 }

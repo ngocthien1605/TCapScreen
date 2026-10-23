@@ -193,6 +193,21 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Review item (7) — app crate refactor: library + `rustshot` (tray) and
+  `rustshot-dev` (console diagnostics) binaries, the parent-console hack removed; dev commands
+  return `Result` with shared steps (960 → 616 lines, outputs unchanged); `settings_ui` split
+  into `ui/settings/{template,dialog,capture}`; `platform/` (DPI, owned GDI handles reused by
+  the editor); `ui/` and `flows/` directories. App crate 7970 → ~7650 lines; tray exe 4.1 →
+  3.3 MB. Re-verified live: screenshot → flyout → editor (draw, prompt, save with the red
+  rectangle in the file), Settings + Browse, region recording start/stop.
+- 2026-10-23: Small fixes after (7): `schema_version` in config (raised quietly, never
+  lowered), sanitize bounds for GIF width/length, screenshot delay and countdown; UTC fallback
+  for file names is logged; MF/IO disk-full errors map to `RecorderError::DiskFull`; logging
+  falls back to stderr when there is no log directory; tray tooltip refreshes when Settings
+  re-registers hotkeys; Settings gets a taskbar button and opens in front; the overlay takes
+  keyboard focus even without recent input (delayed shots); tests use self-cleaning temp dirs
+  and the path tests can fail; unused Windows features dropped; CI on checkout@v5 /
+  upload-artifact@v6 (Node 24). Live: overlay foreground + real Esc, Settings taskbar/front.
 - 2026-10-23: **Release 0.1.5** (tag `v0.1.5`), the first published by the release workflow:
   audio fixes (review item 4), pinned toolchain / cargo-deny / MSRV / release CI (item 5), and
   the medium findings (item 6: DPI scaling, themed controls, GIF timing, atomic saves, strict

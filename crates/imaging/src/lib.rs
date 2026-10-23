@@ -411,10 +411,16 @@ pub struct Timestamp {
 }
 
 impl Timestamp {
-    /// The current local time (falling back to UTC if the local offset can't be determined).
+    /// The current local time, falling back to UTC if the local offset can't be determined (file
+    /// names would then be off by the time-zone offset, so that is logged, once).
     pub fn now_local() -> Self {
-        let now =
-            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let now = time::OffsetDateTime::now_local().unwrap_or_else(|e| {
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!("local time zone unavailable ({e}); file names use UTC");
+            }
+            time::OffsetDateTime::now_utc()
+        });
         Self {
             year: now.year(),
             month: u8::from(now.month()),
@@ -449,6 +455,28 @@ pub fn unique_path(dir: &Path, file_name: &str) -> PathBuf {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A fresh, empty directory under the system temp dir, unique to this process and call,
+    /// removed on drop — also when the test fails, so no stale files leak into later runs.
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(tag: &str) -> TestDir {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("rustshot_{tag}_{}_{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TestDir(dir)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
     use capture_core::Frame;
     use std::time::Duration;
 
@@ -595,8 +623,8 @@ mod tests {
 
     #[test]
     fn save_image_unique_claims_distinct_names_and_leaves_no_temp_files() {
-        let dir = std::env::temp_dir().join(format!("rustshot_saveuniq_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = TestDir::new("saveuniq");
+        let dir = tmp.0.clone();
         let img = RgbaImage::from_pixel(3, 2, image::Rgba([1, 2, 3, 255]));
         let name = "RustShot_2026-10-23_10-00-00.png";
         let a = save_image_unique(&img, &dir, name, 90).unwrap();
@@ -613,13 +641,12 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names.len(), 2, "no temp files left behind: {names:?}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn save_image_replaces_atomically() {
-        let dir = std::env::temp_dir().join(format!("rustshot_atomic_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = TestDir::new("atomic");
+        let dir = tmp.0.clone();
         let path = dir.join("out.png");
         let img = RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 255]));
         save_image(&img, &path, 90).unwrap();
@@ -631,7 +658,6 @@ mod tests {
         .unwrap();
         assert_eq!(image::open(&path).unwrap().width(), 5);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -659,9 +685,8 @@ mod tests {
     #[test]
     fn save_gif_round_trips_frame_timing() {
         use std::time::Duration;
-        let dir = std::env::temp_dir().join(format!("rustshot_gif_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = TestDir::new("gif");
+        let dir = tmp.0.clone();
         let path = dir.join("t.gif");
         let red = RgbaImage::from_pixel(4, 3, image::Rgba([255, 0, 0, 255]));
         let blue = RgbaImage::from_pixel(4, 3, image::Rgba([0, 0, 255, 255]));
@@ -681,16 +706,14 @@ mod tests {
             1,
             "no temp file left"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     #[cfg(windows)]
     fn rename_waits_out_a_brief_lock_on_the_target() {
         use std::os::windows::fs::OpenOptionsExt;
-        let dir = std::env::temp_dir().join(format!("rustshot_lock_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = TestDir::new("lock");
+        let dir = tmp.0.clone();
         let (from, to) = (dir.join("new.tmp"), dir.join("shot.png"));
         std::fs::write(&from, b"new").unwrap();
         std::fs::write(&to, b"old").unwrap();
@@ -707,25 +730,24 @@ mod tests {
         rename_with_retry(&from, &to).unwrap();
         release.join().unwrap();
         assert_eq!(std::fs::read(&to).unwrap(), b"new");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn unique_path_increments_on_collision() {
-        let dir = std::env::temp_dir().join(format!("rustshot_uniq_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = TestDir::new("uniq");
+        let dir = tmp.0.clone();
         let name = "RustShot_2026-10-22_09-07-03.png";
         let first = unique_path(&dir, name);
         assert_eq!(first, dir.join(name));
         std::fs::write(&first, b"x").unwrap();
         let second = unique_path(&dir, name);
         assert_eq!(second, dir.join("RustShot_2026-10-22_09-07-03_2.png"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn save_image_picks_encoder_from_extension() {
-        let dir = std::env::temp_dir().join(format!("rustshot_save_{}", std::process::id()));
+        let tmp = TestDir::new("save");
+        let dir = tmp.0.clone();
         let img = RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
         let png = dir.join("a.png");
         let jpg = dir.join("b.jpg");
@@ -740,6 +762,5 @@ mod tests {
             .unwrap()
             .color()
             .has_alpha());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

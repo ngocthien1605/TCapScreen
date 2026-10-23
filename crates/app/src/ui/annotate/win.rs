@@ -864,6 +864,28 @@ fn confirm_close(hwnd: HWND, dirty: bool) -> bool {
 mod tests {
     use super::*;
 
+    /// A fresh, empty directory under the system temp dir, unique to this process and call,
+    /// removed on drop — also when the test fails, so no stale files leak into later runs.
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(tag: &str) -> TestDir {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("rustshot_{tag}_{}_{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TestDir(dir)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn white(w: u32, h: u32) -> Rgba {
         Rgba::from_raw(w, h, vec![255; (w * h * 4) as usize]).unwrap()
     }
@@ -975,8 +997,8 @@ mod tests {
 
     #[test]
     fn annotated_copy_sits_next_to_the_original_and_never_overwrites() {
-        let dir = std::env::temp_dir().join(format!("rustshot-annot-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = TestDir::new("annot");
+        let dir = tmp.0.clone();
         let src = dir.join("shot.png");
         let (tdir, name) = annotated_target(&src);
         assert_eq!(
@@ -988,6 +1010,5 @@ mod tests {
         let second = imaging::save_image_unique(&img, &tdir, &name, 90).unwrap();
         assert_eq!(first, dir.join("shot_annotated.png"));
         assert_eq!(second, dir.join("shot_annotated_2.png"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

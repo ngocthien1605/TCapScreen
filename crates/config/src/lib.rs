@@ -191,10 +191,18 @@ impl Default for RecordingSettings {
     }
 }
 
+/// The `schema_version` this build writes. Bump it, and add a step to [`Settings::sanitize`],
+/// when an existing key changes meaning.
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// Top-level settings persisted to `config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Format version of this file, so a later release can migrate a key whose meaning changes.
+    /// A file written before versioning has none and reads as 0. See [`Settings::sanitize`].
+    #[serde(default)]
+    pub schema_version: u32,
     /// Where captures are saved. Empty string means "resolve the default at runtime".
     pub output_folder: PathBuf,
     /// Launch RustShot at Windows startup (opt-in `Run` key).
@@ -207,6 +215,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            schema_version: SCHEMA_VERSION,
             output_folder: PathBuf::new(),
             run_at_startup: false,
             screenshot: ScreenshotSettings::default(),
@@ -234,6 +243,13 @@ impl Settings {
     /// process's working directory, which is `System32` when Windows launches the app from the
     /// `Run` key.
     pub fn sanitize(&mut self) -> bool {
+        // Migrations go here, keyed on `schema_version` (none yet: 0 → 1 only adds the field).
+        // Raising the version alone is not worth rewriting the user's file, so it is not
+        // reported as a change; it is written with the next save. A file from a newer build
+        // keeps its version.
+        if self.schema_version < SCHEMA_VERSION {
+            self.schema_version = SCHEMA_VERSION;
+        }
         let mut changed = false;
         if !self.output_folder.as_os_str().is_empty() && !self.output_folder.is_absolute() {
             self.output_folder = PathBuf::new();
@@ -253,6 +269,25 @@ impl Settings {
         }
         if self.recording.bitrate == 0 {
             self.recording.bitrate = 8_000_000;
+            changed = true;
+        }
+        // GIFs: a width the encoder can't use, or a zero/huge length cap (the frames are held in
+        // memory until the end, so the cap bounds memory too).
+        if !(16..=7680).contains(&self.recording.gif_max_width) {
+            self.recording.gif_max_width = 800;
+            changed = true;
+        }
+        if !(1..=600).contains(&self.recording.gif_max_seconds) {
+            self.recording.gif_max_seconds = 30;
+            changed = true;
+        }
+        // Waits longer than these are almost certainly typos, and leave the app looking dead.
+        if self.screenshot.delay_seconds > 60 {
+            self.screenshot.delay_seconds = 0;
+            changed = true;
+        }
+        if self.recording.countdown_seconds > 30 {
+            self.recording.countdown_seconds = 3;
             changed = true;
         }
         changed
@@ -358,6 +393,28 @@ impl Settings {
 mod tests {
     use super::*;
 
+    /// A fresh, empty directory under the system temp dir, unique to this process and call,
+    /// removed on drop — also when the test fails, so no stale files leak into later runs.
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(tag: &str) -> TestDir {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("rustshot_{tag}_{}_{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TestDir(dir)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn defaults_round_trip_through_toml() {
         let s = Settings::default();
@@ -390,7 +447,8 @@ mod tests {
 
     #[test]
     fn save_then_load_is_identity() {
-        let dir = std::env::temp_dir().join(format!("rustshot_test_{}", std::process::id()));
+        let tmp = TestDir::new("test");
+        let dir = tmp.0.clone();
         let path = dir.join("config.toml");
         let mut s = Settings::default();
         s.recording.fps = 60;
@@ -398,13 +456,12 @@ mod tests {
         s.save_to(&path).unwrap();
         let back = Settings::load_from(&path).unwrap();
         assert_eq!(s, back);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn load_missing_file_returns_defaults() {
-        let path = std::env::temp_dir().join("rustshot_definitely_missing_abc123.toml");
-        let _ = std::fs::remove_file(&path);
+        let tmp = TestDir::new("missing");
+        let path = tmp.0.join("config.toml");
         let s = Settings::load_from(&path).unwrap();
         assert_eq!(s, Settings::default());
     }
@@ -423,6 +480,42 @@ mod tests {
         assert_eq!(s.recording.bitrate, 8_000_000);
         // Second pass is a no-op.
         assert!(!s.sanitize());
+    }
+
+    #[test]
+    fn sanitize_repairs_gif_limits_and_long_waits() {
+        let mut s = Settings::default();
+        s.recording.gif_max_width = 0;
+        s.recording.gif_max_seconds = 0;
+        s.screenshot.delay_seconds = 255;
+        s.recording.countdown_seconds = 200;
+        assert!(s.sanitize());
+        assert_eq!(s.recording.gif_max_width, 800);
+        assert_eq!(s.recording.gif_max_seconds, 30);
+        assert_eq!(s.screenshot.delay_seconds, 0);
+        assert_eq!(s.recording.countdown_seconds, 3);
+        // In-range values are kept.
+        let mut ok = Settings::default();
+        ok.recording.gif_max_width = 16;
+        ok.recording.gif_max_seconds = 600;
+        ok.screenshot.delay_seconds = 60;
+        assert!(!ok.sanitize());
+    }
+
+    #[test]
+    fn schema_version_is_raised_quietly_and_never_lowered() {
+        // A file from before versioning reads as 0 and is brought up to date, but that alone
+        // does not count as a repair (no rewrite of the user's file just for the version).
+        let mut old = Settings::from_toml("run_at_startup = true\n", Path::new("t.toml")).unwrap();
+        assert_eq!(old.schema_version, 0);
+        assert!(!old.sanitize());
+        assert_eq!(old.schema_version, SCHEMA_VERSION);
+        assert!(old.to_toml().unwrap().contains("schema_version = 1"));
+        // A newer build's file keeps its version.
+        let mut newer = Settings::from_toml("schema_version = 99\n", Path::new("t.toml")).unwrap();
+        newer.sanitize();
+        assert_eq!(newer.schema_version, 99);
+        assert_eq!(Settings::default().schema_version, SCHEMA_VERSION);
     }
 
     #[test]
@@ -457,13 +550,8 @@ mod tests {
 
     #[test]
     fn load_or_recover_quarantines_garbage_and_returns_defaults() {
-        let dir = std::env::temp_dir().join(format!(
-            "rustshot_recover_{}_{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = TestDir::new("recover");
+        let dir = tmp.0.clone();
         let path = dir.join("config.toml");
         std::fs::write(&path, "this is = = not toml [[[").unwrap();
 
@@ -485,17 +573,12 @@ mod tests {
             std::fs::read_to_string(&to).unwrap(),
             "this is = = not toml [[["
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn load_or_recover_passes_valid_and_missing_files_through() {
-        let dir = std::env::temp_dir().join(format!(
-            "rustshot_recover_{}_{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = TestDir::new("recover");
+        let dir = tmp.0.clone();
         let path = dir.join("config.toml");
         // Missing: first run, no recovery.
         let (s, rec) = Settings::load_or_recover(&path);
@@ -509,7 +592,6 @@ mod tests {
         assert_eq!(s, want);
         assert_eq!(rec, None);
         assert!(path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

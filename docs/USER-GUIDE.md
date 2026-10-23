@@ -124,6 +124,7 @@ updated). Everything is also editable directly in `config.toml`.
 ### config.toml keys
 
 ```toml
+schema_version = 1           # file format version, written by RustShot; leave as is
 output_folder = ""          # empty = default (Pictures\RustShot)
 run_at_startup = false       # add/remove the per-user Run entry
 
@@ -132,19 +133,19 @@ format = "png"               # "png" or "jpeg"
 jpeg_quality = 90            # 1..=100
 include_cursor = false
 copy_to_clipboard = true
-delay_seconds = 0            # countdown before a screenshot
+delay_seconds = 0            # wait before a screenshot (0..=60)
 
 [recording]
 fps = 30
 bitrate = 8000000            # video bits per second
 include_cursor = true
-countdown_seconds = 3
+countdown_seconds = 3        # 0..=30
 capture_microphone = false
 capture_system_audio = false
 microphone_device = ""       # empty = system default; else the microphone's name (or part
                              # of it) as shown in Windows Settings > System > Sound > Input
-gif_max_width = 800          # longer edge; frames are scaled to fit
-gif_max_seconds = 30
+gif_max_width = 800          # longer edge, 16..=7680; frames are scaled to fit
+gif_max_seconds = 30         # 1..=600; the recording stops, with a notice, at the limit
 gif_fps = 15
 
 [hotkeys]
@@ -161,8 +162,8 @@ from a newer build still loads in an older one.
 
 ## Troubleshooting
 
-- **A hotkey does nothing:** another app owns it (see the note above). The tray tooltip set at
-  startup says how many hotkeys were unavailable then; rebind them in **Settings…** (it tells
+- **A hotkey does nothing:** another app owns it (see the note above). The tray tooltip says
+  how many hotkeys are unavailable (it updates after a change in Settings); rebind them in **Settings…** (it tells
   you if the new key is taken too) or in `config.toml`.
 - **"The settings file could not be read" at startup:** `config.toml` was not valid TOML (usually
   a hand-edit typo). RustShot moved it to `config.toml.broken-<number>` next to the original,

@@ -23,14 +23,13 @@ use windows::Win32::Graphics::Gdi::{
     PAINTSTRUCT, PS_SOLID, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU,
-    IDC_CROSS, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, ShowWindow,
+    TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU, IDC_CROSS, MSG, SW_SHOW, WM_CHAR,
+    WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use super::state::{crosshair_bars, label_position, Outcome, SelectionState};
@@ -88,8 +87,7 @@ pub fn select(windows: &[WindowInfo], frozen: &Frame, bbox: Rect) -> Result<Outc
     // SAFETY: standard show/focus sequence on a just-created window.
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = SetForegroundWindow(hwnd);
-        let _ = SetFocus(Some(hwnd));
+        crate::platform::bring_to_front(hwnd);
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
 

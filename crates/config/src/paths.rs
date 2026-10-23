@@ -50,19 +50,20 @@ mod tests {
     #[test]
     fn app_dir_ends_with_rustshot() {
         // Does not touch the filesystem; just resolves a path.
-        if let Ok(dir) = app_dir() {
-            assert_eq!(dir.file_name().and_then(|s| s.to_str()), Some("RustShot"));
-        }
+        let dir = app_dir().expect("APPDATA resolves on Windows");
+        assert_eq!(dir.file_name().and_then(|s| s.to_str()), Some("RustShot"));
     }
 
     #[test]
     fn config_file_is_under_app_dir() {
-        if let (Ok(cfg), Ok(dir)) = (config_file(), app_dir()) {
-            assert!(cfg.starts_with(&dir));
-            assert_eq!(
-                cfg.file_name().and_then(|s| s.to_str()),
-                Some("config.toml")
-            );
-        }
+        let (cfg, dir) = (
+            config_file().expect("config path"),
+            app_dir().expect("app dir"),
+        );
+        assert!(cfg.starts_with(&dir));
+        assert_eq!(
+            cfg.file_name().and_then(|s| s.to_str()),
+            Some("config.toml")
+        );
     }
 }
