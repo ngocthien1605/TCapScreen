@@ -193,6 +193,10 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: **Release 0.1.5** (tag `v0.1.5`), the first published by the release workflow:
+  audio fixes (review item 4), pinned toolchain / cargo-deny / MSRV / release CI (item 5), and
+  the medium findings (item 6: DPI scaling, themed controls, GIF timing, atomic saves, strict
+  shortcut names, bounded logs, safer editor/overlay window state).
 - 2026-10-23: Review item (6) — the medium findings. Overlay copy bounded by `Frame::row` and
   GDI guards; editor state ownership via a thread-local adopted in WM_NCCREATE (no double free),
   no `&mut` state across message boxes / DestroyWindow; Browse picker owned by Settings; flyout
