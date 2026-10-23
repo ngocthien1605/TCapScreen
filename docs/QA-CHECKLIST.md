@@ -3,6 +3,12 @@
 These steps cannot run on a headless CI runner. Run them on a real Windows 11 desktop,
 ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 
+The hardware checks that need a person (listening to recordings, a second monitor, Bluetooth
+and USB devices, a driver reset, sign-in at startup) are collected, with steps and pass
+criteria, on the "RustShot Hardware Checks" page:
+https://claude.ai/artifact/VG1gbGztE6cnHgdKji2GtC (private to the owner). Results recorded
+there are copied into this file.
+
 `dev <command>` below means `rustshot-dev <command>` (the diagnostics binary built alongside
 `rustshot.exe`; entries written before review item (7) used `rustshot dev <command>`).
 
