@@ -12,6 +12,7 @@ mod capture_flow;
 mod clipboard;
 mod dev;
 mod dispatch;
+mod dpi;
 mod flyout;
 mod hotkeys;
 mod icon;

@@ -193,6 +193,19 @@ Status legend: ✅ done & verified · 🟡 in progress · ⬜ not started · �
 ---
 
 ### Verification log
+- 2026-10-23: Review item (6) — the medium findings. Overlay copy bounded by `Frame::row` and
+  GDI guards; editor state ownership via a thread-local adopted in WM_NCCREATE (no double free),
+  no `&mut` state across message boxes / DestroyWindow; Browse picker owned by Settings; flyout
+  waits while hovered; strict shortcut key names (W3C list + aliases, rejected otherwise, test
+  ties it to registration); logs keep 14 days, panic.log rolls at 1 MB; screenshots/annotated
+  copies claim names with create_new and write atomically (rename retried for OneDrive); release
+  build requires embedded resources; shared `FrameClock` with exact frame timestamps; GIF frames
+  timed by slots (playback = recorded time) and a notice at the length cap; GPU read-backs capped
+  at the output fps with a held frame + `pump()`, reused staging texture; stream start no longer
+  leaks its handler on error; DPI-scaled flyout/toolbar/editor toolbar with the system font and
+  per-monitor placement; Common Controls v6; per-user MSI source (unbuilt). Live (debug build):
+  overlay, flyout hover, editor close/prompt/save, Browse modality, 4 rapid screenshots into
+  OneDrive, MP4 + GIF timing, themed Settings, scaled flyout/toolbar/editor at 125 %.
 - 2026-10-23: Review item (5) — CI and releases. `rust-toolchain.toml` pinned to `1.98.1`
   (was `stable`); CI installs the toolchain named there (composite action
   `.github/actions/setup-rust`), adds `cargo deny check` (cargo-deny 0.20.2, same as local),

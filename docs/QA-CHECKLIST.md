@@ -44,6 +44,16 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 - [ ] Output PNG auto-named + saved to the output folder AND copied to the clipboard.
 - [ ] Flyout shows a thumbnail + Annotate / Open / Open folder / Copy / Copy path / Delete, all working.
 - [x] Annotate: opens the editor; Rectangle and Text tools draw in red; Text → type → Enter saves (Shift+Enter or Alt+Enter = new line, not saved; verified live); red crosshair cursor over the canvas (verified by reading the live cursor bitmap); Undo (Ctrl+Z); Save (Ctrl+S) writes `_annotated` copies without overwriting (`_annotated_2` on repeat); closing with unsaved work prompts. *(Driven end-to-end on the release build with real mouse and keyboard events; saved file inspected: annotations at full resolution in the right place.)* Still worth a human look: very large screenshots, text with accents/emoji, multi-monitor DPI.
+- [x] Flyout stays while the pointer is over it (11 s hover: still open) and goes ~1 s after the
+      pointer leaves; at 125 % it is drawn at 625×212 with the system font, inside the work area
+      of the monitor under the pointer. *(Driven on the debug build, 2026-10-23.)*
+- [x] Editor: close with no edits → closes, no prompt; draw then close → prompt; Cancel → still
+      open; close again → Yes → `_annotated.png` saved and the editor closes. Toolbar scaled at
+      125 %. *(Same session.)*
+- [x] Four Monitor screenshots in a row into the OneDrive-synced `Pictures\RustShot` → four
+      files, no temp files left, no errors.
+- [ ] Editor dragged to a monitor with a different scale re-lays out (`WM_DPICHANGED`); needs a
+      second monitor.
 - [ ] Protected/DRM window → near-black detected and a warning surfaced (not a silent black PNG).
 
 ## M3 — Recording (MP4, video-only)
@@ -98,8 +108,7 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
 ## M5 — GIF
 - [ ] Short region recording exports an optimised GIF that opens in a browser.
 - [ ] Dimension/length caps enforced with a clear warning. *(Length cap now ends the recording
-      with the notice "it reached the N-second limit for GIF recordings"; code path unit-free,
-      not yet seen live.)*
+      with the notice "it reached the N-second limit for GIF recordings"; not seen live yet.)*
 - [x] GIF playback length matches the time recorded: `dev record-gif 0 6` → 5.73 s of playback
       from 6.0 s wall (first frame ~0.3 s in), 19 distinct frames over 86 slots.
 
@@ -117,6 +126,8 @@ ideally a multi-monitor, mixed-DPI rig. Record pass/fail + notes in PROGRESS.md.
       Screenpresso running.)* Hotkeys are suspended while Settings is open and restored after
       Cancel. Still worth a human check: the Win-key combos, and PrintScreen with Windows'
       "Use the Print screen key to open screen capture" setting turned on.
+- [x] Settings → Browse: the folder picker is modal to the dialog (dialog disabled while it is
+      open, enabled again after it closes). Settings renders themed (Common Controls v6).
 - [x] Settings + capture dialog templates render without error — auto-verified by
       `rustshot dev settings-selftest` (both must report OK, not a `-1` result).
 - [ ] Run-at-startup toggle adds/removes the `Run` key (opt-in).

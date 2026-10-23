@@ -287,7 +287,34 @@ Every non-obvious choice + a one-line rationale. Newest at top within each phase
 - **Manifest + icon via `embed-resource`/rc.exe**, embedding `app.manifest` (Per-Monitor-V2 DPI,
   `asInvoker`, Win10/11 supportedOS) and an `.ico` generated from the programmatic tray icon.
   `SetProcessDpiAwarenessContext` is kept as well so the un-manifested dev/test binaries are
-  still DPI-correct. Resource embedding is optional so a toolchain without rc.exe still builds.
+  still DPI-correct. Resource embedding is optional for debug builds so a toolchain without
+  rc.exe still builds, but a **release** build fails without it (it would otherwise ship
+  DPI-unaware and iconless). The manifest also requests **Common Controls v6**, so buttons,
+  checkboxes and edits are themed (Windows 11 look) instead of the Windows 2000 fallback;
+  verified with a capture of the live Settings dialog and `dev settings-selftest`.
+- **Hand-placed windows scale with the monitor's DPI** (`app/src/dpi.rs`). Per-Monitor-V2
+  means Windows no longer stretches our windows, so the flyout, recording toolbar and editor
+  toolbar, whose layouts are written in 96-DPI pixels, are scaled by the DPI of the monitor they
+  open on (verified at 125 %: flyout 625×212, toolbar 300×70) and use the system message font at
+  that DPI (before, the flyout and toolbar buttons had no font set at all). The flyout and
+  toolbar open on the monitor under the pointer, inside its work area (clear of the taskbar),
+  rather than at fixed offsets from the primary screen's corner. Only the editor handles
+  `WM_DPICHANGED` (it is the one long-lived, draggable window); the flyout lives for seconds and
+  the toolbar stays put, so both keep their creation DPI. The 32-px crosshair cursor is not
+  scaled. Template dialogs (Settings) are scaled by the dialog manager.
+- **Window state is owned, not aliased.** The editor's state reaches its window through a
+  thread-local that `WM_NCCREATE` adopts, so it is freed exactly once however
+  `CreateWindowExW` fails; no `&mut` to window state is held across a call that pumps messages
+  (`MessageBoxW`, `DestroyWindow`); GDI handles live in guards so error paths don't leak them.
+  The Settings folder picker is owned by the dialog (modal to it).
+- **Files are written atomically and never clobbered.** Screenshots and annotated copies claim
+  their name with an exclusive create, then write to a temporary sibling and rename over the
+  placeholder; the rename is retried briefly while a sync client (OneDrive) or scanner holds the
+  new file open. The daily logs keep 14 files; `panic.log` rolls over at 1 MB.
+- **Shortcut names are validated against what can be registered.** `config` holds the list of
+  key names (W3C spelling, with aliases such as `Up`, `Caps`, `Menu`); anything else fails to
+  parse, so Settings refuses it on OK instead of saving a key that silently never fires. A test
+  keeps that list and the registration mapping in agreement.
 - **Settings dialog from an in-memory `DLGTEMPLATE`, not egui.** eframe wants the main-thread
   event loop, which already belongs to the tray pump + nested overlay/dialog loops — three event
   loops would fight. A classic dialog template gives tab order, the default button, and

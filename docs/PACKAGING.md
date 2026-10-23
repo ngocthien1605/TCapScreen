@@ -53,13 +53,23 @@ cargo install cargo-wix
 cargo wix --nocapture
 ```
 
-Produces `target/wix/RustShot-<version>-x86_64.msi`. The source is `wix/main.wxs`: it installs
-`rustshot.exe` to `Program Files\RustShot`, adds a Start-menu shortcut, registers an
-Add/Remove-Programs entry with the app icon, and supports in-place major upgrades.
+Produces `target/wix/RustShot-<version>-x86_64.msi`. The source is `wix/main.wxs`: a **per-user**
+install (no elevation) to `%LOCALAPPDATA%\Programs\RustShot`, a Start-menu shortcut, an
+Add/Remove-Programs entry with the app icon and a link to the GitHub repository, and in-place
+major upgrades. Per-user matches the app: its config, logs and the optional Run-at-startup entry
+are all per-user (HKCU / `%APPDATA%`), and an all-users install would have put per-user registry
+data in per-machine components.
 
-> Not built in this environment (WiX isn't installed here). The `.wxs` is authored to WiX v3
-> conventions; building the MSI and verifying it on a clean Windows 11 VM (install → Start-menu
-> launch → uninstall) is a release-time step (QA-CHECKLIST M7).
+> **Not built or tested.** WiX isn't installed here and CI does not build the MSI, so this file
+> has never been through `candle`/`light` or ICE validation. Before shipping one: build it, run
+> the ICE checks, and on a clean Windows 11 VM verify install → Start-menu launch → upgrade over
+> a running copy → uninstall (QA-CHECKLIST M7).
+>
+> Known gaps: uninstall does not remove the `HKCU\…\Run\RustShot` value if the user enabled
+> Run-at-startup (Windows Installer has no "remove this one value on uninstall" without a
+> custom action; turn the setting off before uninstalling, or the stale entry fails silently at
+> logon), and an upgrade while RustShot is running asks the user to close it (no
+> `util:CloseApplication`, which would need the WiX Util extension).
 
 ## Dependency policy (cargo-deny)
 

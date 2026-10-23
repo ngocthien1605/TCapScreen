@@ -5,6 +5,14 @@
       cargo wix            # produces target/wix/RustShot-<version>-x86_64.msi
   cargo-wix supplies $(var.Version), $(var.Platform), and $(var.CargoTargetBinDir).
   Paths without that variable are relative to this file (wix/).
+
+  Per-user install: everything RustShot owns is per-user (config and logs in %APPDATA%, the
+  optional HKCU Run entry), so the app installs to %LOCALAPPDATA%\Programs\RustShot without
+  elevation, like other per-user apps. Every component therefore has an HKCU registry KeyPath
+  (ICE38) and the folders it creates are removed on uninstall (ICE64).
+
+  NOT BUILT OR TESTED in this repository's environment (no WiX here, and CI does not build it):
+  see docs/PACKAGING.md before shipping an MSI.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*"
@@ -17,21 +25,22 @@
 
     <Package Id="*"
              Keywords="Installer"
-             Description="RustShot — screenshots and screen recording for Windows"
+             Description="RustShot - screenshots and screen recording for Windows"
              Manufacturer="RustShot contributors"
-             InstallerVersion="450"
+             InstallerVersion="500"
              Languages="1033"
              Compressed="yes"
-             InstallScope="perMachine"
+             InstallScope="perUser"
+             InstallPrivileges="limited"
              SummaryCodepage="1252" />
 
     <MajorUpgrade Schedule="afterInstallInitialize"
                   DowngradeErrorMessage="A newer version of RustShot is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="ProductIcon" SourceFile="..\crates\app\resources\rustshot.ico" />
-    <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
-    <Property Id="ARPHELPLINK" Value="https://example.invalid/rustshot" />
+    <Icon Id="ProductIcon.ico" SourceFile="..\crates\app\resources\rustshot.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/ngocthien1605/rustshot" />
 
     <Feature Id="MainFeature" Title="RustShot" Level="1">
       <ComponentRef Id="RustShotExe" />
@@ -39,27 +48,35 @@
     </Feature>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="RustShot">
-          <Component Id="RustShotExe" Guid="*">
-            <File Id="RustShotExeFile"
-                  Source="$(var.CargoTargetBinDir)\rustshot.exe"
-                  KeyPath="yes" />
-          </Component>
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsDir" Name="Programs">
+          <Directory Id="INSTALLDIR" Name="RustShot">
+            <Component Id="RustShotExe" Guid="3C1A7E52-8B4D-4F0E-9D63-2A5B7C8E9F01">
+              <File Id="RustShotExeFile" Source="$(var.CargoTargetBinDir)\rustshot.exe" />
+              <RegistryValue Root="HKCU"
+                             Key="Software\RustShot\Installer"
+                             Name="exe"
+                             Type="integer"
+                             Value="1"
+                             KeyPath="yes" />
+              <RemoveFolder Id="RemoveInstallDir" Directory="INSTALLDIR" On="uninstall" />
+              <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
+            </Component>
+          </Directory>
         </Directory>
       </Directory>
 
       <Directory Id="ProgramMenuFolder">
-        <Component Id="StartMenuShortcut" Guid="*">
+        <Component Id="StartMenuShortcut" Guid="9B2E4D61-5C7A-4E38-A1F0-6D3C8B2A7E14">
           <Shortcut Id="RustShotShortcut"
                     Name="RustShot"
                     Target="[INSTALLDIR]rustshot.exe"
                     WorkingDirectory="INSTALLDIR"
-                    Icon="ProductIcon" />
+                    Icon="ProductIcon.ico" />
           <RemoveFolder Id="CleanProgramMenu" On="uninstall" />
           <RegistryValue Root="HKCU"
-                         Key="Software\RustShot"
-                         Name="installed"
+                         Key="Software\RustShot\Installer"
+                         Name="shortcut"
                          Type="integer"
                          Value="1"
                          KeyPath="yes" />

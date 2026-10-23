@@ -19,11 +19,11 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, GetWindowLongPtrW, KillTimer,
-    RegisterClassW, SetTimer, SetWindowLongPtrW, ShowWindow, CREATESTRUCTW, GWLP_USERDATA, HMENU,
-    SM_CXSCREEN, SM_CYSCREEN, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_EX_STYLE, WM_COMMAND, WM_DESTROY,
-    WM_NCCREATE, WM_PAINT, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW, KillTimer,
+    RegisterClassW, SendMessageW, SetTimer, SetWindowLongPtrW, ShowWindow, CREATESTRUCTW,
+    GWLP_USERDATA, HMENU, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_EX_STYLE, WM_COMMAND, WM_DESTROY,
+    WM_NCCREATE, WM_PAINT, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::dispatch::{self, Action};
@@ -31,8 +31,12 @@ use crate::dispatch::{self, Action};
 const CLASS_NAME: PCWSTR = w!("RustShotFlyout");
 static REGISTER: Once = Once::new();
 
+/// Window size at 96 DPI; scaled to the monitor's DPI when shown (see `dpi`). The flyout keeps
+/// the DPI it was created at (it lives for seconds), so it does not handle `WM_DPICHANGED`.
 const WIN_W: i32 = 500;
 const WIN_H: i32 = 170;
+/// Gap between the flyout and the work-area corner, at 96 DPI.
+const EDGE: i32 = 16;
 const DISMISS_MS: u32 = 8000;
 const TIMER_ID: usize = 1;
 /// How soon to look again when the pointer is over the flyout at dismissal time.
@@ -54,6 +58,10 @@ struct FlyoutInner {
     thumb_bgra: Vec<u8>,
     thumb_w: i32,
     thumb_h: i32,
+    /// DPI the flyout was laid out for.
+    dpi: u32,
+    /// Button font at that DPI (kept alive as long as the buttons).
+    _font: Option<crate::dpi::UiFont>,
 }
 
 /// A live flyout window. Dropping it destroys the window.
@@ -68,7 +76,10 @@ impl Flyout {
     pub fn show(dispatch_hwnd: HWND, path: &Path, img: &Rgba) -> Result<Flyout> {
         ensure_class()?;
 
-        let thumb = imaging::thumbnail(img, 300);
+        // Appear on the monitor the user is working on, in its work area (clear of the taskbar).
+        let (work, dpi) = crate::dpi::cursor_monitor();
+        let px = |v: i32| crate::dpi::scale(v, dpi);
+        let thumb = imaging::thumbnail(img, px(300) as u32);
         let (tw, th) = (thumb.width() as i32, thumb.height() as i32);
         let thumb_bgra = rgba_to_bgra(thumb.as_raw());
 
@@ -78,15 +89,15 @@ impl Flyout {
             thumb_bgra,
             thumb_w: tw,
             thumb_h: th,
+            dpi,
+            _font: crate::dpi::UiFont::new(dpi),
         });
 
         // SAFETY: standard top-most tool window creation; CREATESTRUCT carries the inner ptr.
         let hwnd = unsafe {
             let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
-            let sw = GetSystemMetrics(SM_CXSCREEN);
-            let sh = GetSystemMetrics(SM_CYSCREEN);
-            let x = (sw - WIN_W - 24).max(0);
-            let y = (sh - WIN_H - 64).max(0);
+            let x = (work.right - px(WIN_W) - px(EDGE)).max(work.left);
+            let y = (work.bottom - px(WIN_H) - px(EDGE)).max(work.top);
             let ptr: *mut FlyoutInner = &mut *inner;
             CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -95,8 +106,8 @@ impl Flyout {
                 WS_POPUP,
                 x,
                 y,
-                WIN_W,
-                WIN_H,
+                px(WIN_W),
+                px(WIN_H),
                 None,
                 Some(HMENU(null_mut())),
                 Some(hinstance.into()),
@@ -105,7 +116,7 @@ impl Flyout {
             .context("creating flyout window")?
         };
 
-        create_buttons(hwnd)?;
+        create_buttons(hwnd, dpi, inner._font.as_ref())?;
 
         // SAFETY: show without activating (don't steal focus), and arm the auto-dismiss timer.
         unsafe {
@@ -202,7 +213,7 @@ fn ensure_class() -> Result<()> {
     }
 }
 
-fn create_buttons(parent: HWND) -> Result<()> {
+fn create_buttons(parent: HWND, dpi: u32, font: Option<&crate::dpi::UiFont>) -> Result<()> {
     let labels = [
         (ID_ANNOTATE, w!("Annotate")),
         (ID_OPEN, w!("Open")),
@@ -211,13 +222,14 @@ fn create_buttons(parent: HWND) -> Result<()> {
         (ID_PATH, w!("Path")),
         (ID_DELETE, w!("Delete")),
     ];
-    let (bw, bh, gap, x0, y) = (76i32, 28i32, 4i32, 12i32, WIN_H - 40);
+    let px = |v: i32| crate::dpi::scale(v, dpi);
+    let (bw, bh, gap, x0, y) = (px(76), px(28), px(4), px(12), px(WIN_H - 40));
     // SAFETY: standard BUTTON child-window creation.
     unsafe {
         let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
         for (i, (id, label)) in labels.iter().enumerate() {
             let x = x0 + i as i32 * (bw + gap);
-            CreateWindowExW(
+            let button = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 w!("BUTTON"),
                 *label,
@@ -233,6 +245,14 @@ fn create_buttons(parent: HWND) -> Result<()> {
                 None,
             )
             .context("creating flyout button")?;
+            if let Some(f) = font {
+                SendMessageW(
+                    button,
+                    WM_SETFONT,
+                    Some(WPARAM(f.0 .0 as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
         }
     }
     Ok(())
@@ -318,25 +338,22 @@ fn paint(hwnd: HWND, inner: &FlyoutInner) {
         let hdc = BeginPaint(hwnd, &mut ps);
 
         let bg = CreateSolidBrush(COLORREF(0x0014_1210));
-        let client = RECT {
-            left: 0,
-            top: 0,
-            right: WIN_W,
-            bottom: WIN_H,
-        };
+        let mut client = RECT::default();
+        let _ = GetClientRect(hwnd, &mut client);
         FillRect(hdc, &client, bg);
         let _ = DeleteObject(HGDIOBJ(bg.0));
 
         // Fit the thumbnail into the preview area, preserving aspect ratio.
-        let (area_w, area_h) = (WIN_W - 24, WIN_H - 60);
+        let px = |v: i32| crate::dpi::scale(v, inner.dpi);
+        let (area_w, area_h) = (client.right - px(24), client.bottom - px(60));
         let (tw, th) = (inner.thumb_w.max(1), inner.thumb_h.max(1));
         let scale = (area_w as f64 / tw as f64)
             .min(area_h as f64 / th as f64)
             .min(1.0);
         let dw = (tw as f64 * scale).round() as i32;
         let dh = (th as f64 * scale).round() as i32;
-        let dx = 12 + (area_w - dw) / 2;
-        let dy = 10 + (area_h - dh) / 2;
+        let dx = px(12) + (area_w - dw) / 2;
+        let dy = px(10) + (area_h - dh) / 2;
 
         let mut bmi = BITMAPINFO::default();
         bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;

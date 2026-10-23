@@ -21,22 +21,23 @@ use windows::Win32::Graphics::Gdi::{
     CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GdiFlush,
     GetStockObject, IntersectClipRect, InvalidateRect, Rectangle, ReleaseDC, RestoreDC, SaveDC,
     SelectObject, SetBkMode, SetStretchBltMode, SetTextColor, StretchBlt, BITMAPINFO,
-    BITMAPINFOHEADER, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_GUI_FONT,
-    DIB_RGB_COLORS, DT_NOPREFIX, DT_WORDBREAK, HALFTONE, HBITMAP, HDC, HGDIOBJ, HOLLOW_BRUSH,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_INSIDEFRAME, SRCCOPY, TRANSPARENT,
+    BITMAPINFOHEADER, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS,
+    DT_NOPREFIX, DT_WORDBREAK, HALFTONE, HBITMAP, HDC, HGDIOBJ, HOLLOW_BRUSH, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, PS_INSIDEFRAME, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::CheckRadioButton;
+use windows::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_RETURN,
     VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRect, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-    GetSystemMetrics, GetWindowLongPtrW, LoadCursorW, MessageBoxW, RegisterClassW, SendMessageW,
-    SetWindowLongPtrW, SetWindowTextW, ShowWindow, CW_USEDEFAULT, GWLP_USERDATA, HMENU, IDC_CROSS,
-    IDNO, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
-    WINDOW_EX_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetDlgItem, GetWindowLongPtrW,
+    LoadCursorW, MessageBoxW, MoveWindow, RegisterClassW, SendMessageW, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, GWLP_USERDATA, HMENU, IDC_CROSS, IDNO, IDYES,
+    MB_ICONQUESTION, MB_YESNOCANCEL, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE,
+    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT, WM_SIZE,
     WM_SYSKEYDOWN, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
@@ -48,8 +49,23 @@ use super::model::{
 const CLASS_NAME: PCWSTR = w!("RustShotAnnotate");
 static REGISTER: Once = Once::new();
 
+/// Toolbar height and canvas margin at 96 DPI; scaled by the window's DPI (see `dpi`).
 const TOOLBAR_H: i32 = 40;
 const MARGIN: i32 = 8;
+/// Toolbar buttons: id, label, x, width, extra style — all lengths at 96 DPI.
+const BUTTONS: [(i32, PCWSTR, i32, i32, u32); 5] = [
+    (
+        ID_RECT,
+        w!("Rectangle"),
+        8,
+        80,
+        BS_PUSHLIKE | BS_RADIOBUTTON | WS_GROUP,
+    ),
+    (ID_TEXT, w!("Text"), 92, 80, BS_PUSHLIKE | BS_RADIOBUTTON),
+    (ID_UNDO, w!("Undo"), 188, 60, 0),
+    (ID_SAVE, w!("Save"), 256, 60, 0),
+    (ID_COPY, w!("Copy"), 324, 60, 0),
+];
 /// Outline thickness in image pixels.
 const LINE_PX: i32 = 3;
 const RED: COLORREF = COLORREF(0x0000_00FF); // 0x00BBGGRR
@@ -80,6 +96,10 @@ struct Ctx {
     dirty: bool,
     /// Pending UTF-16 high surrogate from a `WM_CHAR` pair.
     high_surrogate: Option<u16>,
+    /// DPI of the monitor the window is on; layout lengths are scaled by it.
+    dpi: u32,
+    /// Toolbar font at `dpi`.
+    font: Option<crate::dpi::UiFont>,
 }
 
 impl Drop for Ctx {
@@ -124,22 +144,29 @@ fn try_open(path: &Path) -> Result<()> {
         view: View::IDENTITY,
         dirty: false,
         high_surrogate: None,
+        dpi: crate::dpi::BASE,
+        font: None,
     });
 
-    // Size the window to the image where it fits, bounded by the screen.
+    // Size the window to the image where it fits, bounded by the work area of the monitor the
+    // user is on, and centre it there.
+    let (work, dpi) = crate::dpi::cursor_monitor();
+    let px = |v: i32| crate::dpi::scale(v, dpi);
     // SAFETY: plain metric queries and window creation. The window adopts `ctx` in
     // WM_NCCREATE (via PENDING) and frees it in WM_NCDESTROY.
     let created = unsafe {
-        let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-        let cw = (iw + 2 * MARGIN).clamp(640, (sw * 9 / 10).max(640));
-        let ch = (ih + TOOLBAR_H + 2 * MARGIN).clamp(420, (sh * 85 / 100).max(420));
+        let (sw, sh) = (work.right - work.left, work.bottom - work.top);
+        let cw = (iw + 2 * px(MARGIN)).clamp(px(640), (sw * 9 / 10).max(px(640)));
+        let ch = (ih + px(TOOLBAR_H) + 2 * px(MARGIN)).clamp(px(420), (sh * 85 / 100).max(px(420)));
         let mut r = RECT {
             left: 0,
             top: 0,
             right: cw,
             bottom: ch,
         };
-        let _ = AdjustWindowRect(&mut r, WS_OVERLAPPEDWINDOW, false);
+        let _ =
+            AdjustWindowRectExForDpi(&mut r, WS_OVERLAPPEDWINDOW, false, WINDOW_EX_STYLE(0), dpi);
+        let (ww, wh) = (r.right - r.left, r.bottom - r.top);
         let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
         let title = HSTRING::from(title_for(path, None));
         PENDING.with(|p| *p.borrow_mut() = Some(ctx));
@@ -148,10 +175,10 @@ fn try_open(path: &Path) -> Result<()> {
             CLASS_NAME,
             PCWSTR(title.as_ptr()),
             WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            r.right - r.left,
-            r.bottom - r.top,
+            work.left + ((sw - ww) / 2).max(0),
+            work.top + ((sh - wh) / 2).max(0),
+            ww,
+            wh,
             None,
             Some(HMENU(null_mut())),
             Some(hinstance.into()),
@@ -222,55 +249,62 @@ fn ensure_class() -> Result<()> {
 }
 
 fn create_toolbar(parent: HWND) -> Result<()> {
-    let items: [(i32, PCWSTR, i32, u32); 5] = [
-        (
-            ID_RECT,
-            w!("Rectangle"),
-            8,
-            BS_PUSHLIKE | BS_RADIOBUTTON | WS_GROUP,
-        ),
-        (ID_TEXT, w!("Text"), 92, BS_PUSHLIKE | BS_RADIOBUTTON),
-        (ID_UNDO, w!("Undo"), 188, 0),
-        (ID_SAVE, w!("Save"), 256, 0),
-        (ID_COPY, w!("Copy"), 324, 0),
-    ];
-    // SAFETY: standard BUTTON child creation, each given the stock GUI font.
+    // SAFETY: standard BUTTON child creation; sizes and font are applied by `layout_toolbar`.
     unsafe {
         let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
-        let font = GetStockObject(DEFAULT_GUI_FONT);
-        for (id, label, x, extra) in items {
-            let width = if id == ID_RECT || id == ID_TEXT {
-                80
-            } else {
-                60
-            };
-            let h = CreateWindowExW(
+        for (id, label, _, _, extra) in BUTTONS {
+            CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 w!("BUTTON"),
                 label,
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | extra,
                 ),
-                x,
-                6,
-                width,
-                28,
+                0,
+                0,
+                0,
+                0,
                 Some(parent),
                 Some(HMENU(id as isize as *mut c_void)),
                 Some(hinstance.into()),
                 None,
             )
             .context("creating a toolbar button")?;
-            SendMessageW(
-                h,
-                WM_SETFONT,
-                Some(WPARAM(font.0 as usize)),
-                Some(LPARAM(1)),
-            );
         }
         let _ = CheckRadioButton(parent, ID_RECT, ID_TEXT, ID_RECT);
     }
+    set_dpi(parent, crate::dpi::of_window(parent));
     Ok(())
+}
+
+/// Adopt `dpi` (at creation, and on `WM_DPICHANGED` when the window moves to a monitor with a
+/// different scale): a font for that DPI, toolbar buttons resized and refonted, canvas re-fit.
+fn set_dpi(hwnd: HWND, dpi: u32) {
+    let Some(ctx) = ctx_of(hwnd) else {
+        return;
+    };
+    ctx.dpi = dpi;
+    ctx.font = crate::dpi::UiFont::new(dpi);
+    let font = ctx.font.as_ref().map(|f| f.0);
+    let px = |v: i32| crate::dpi::scale(v, dpi);
+    // SAFETY: repositions and refonts our own child buttons.
+    unsafe {
+        for (id, _, x, width, _) in BUTTONS {
+            let Ok(button) = GetDlgItem(Some(hwnd), id) else {
+                continue;
+            };
+            let _ = MoveWindow(button, px(x), px(6), px(width), px(28), true);
+            if let Some(f) = font {
+                SendMessageW(
+                    button,
+                    WM_SETFONT,
+                    Some(WPARAM(f.0 as usize)),
+                    Some(LPARAM(1)),
+                );
+            }
+        }
+    }
+    relayout(hwnd, ctx);
 }
 
 fn ctx_of<'a>(hwnd: HWND) -> Option<&'a mut Ctx> {
@@ -310,6 +344,27 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
     };
 
     match msg {
+        WM_DPICHANGED => {
+            // Moved to a monitor with another scale: take the size Windows suggests (it keeps
+            // the window the same physical size relative to the new DPI), then re-layout.
+            let new_dpi = (wparam.0 & 0xFFFF) as u32;
+            // SAFETY: lParam points at the suggested window RECT for this message.
+            unsafe {
+                let r = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    r.left,
+                    r.top,
+                    r.right - r.left,
+                    r.bottom - r.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            set_dpi(hwnd, new_dpi);
+            redraw(hwnd);
+            LRESULT(0)
+        }
         WM_SIZE => {
             relayout(hwnd, ctx);
             redraw(hwnd);
@@ -507,11 +562,13 @@ fn relayout(hwnd: HWND, ctx: &mut Ctx) {
     unsafe {
         let _ = GetClientRect(hwnd, &mut rc);
     }
+    let px = |v: i32| crate::dpi::scale(v, ctx.dpi);
+    let (margin, bar) = (px(MARGIN), px(TOOLBAR_H));
     let area = Rect::new(
-        MARGIN,
-        TOOLBAR_H + MARGIN,
-        (rc.right - 2 * MARGIN).max(1),
-        (rc.bottom - TOOLBAR_H - 2 * MARGIN).max(1),
+        margin,
+        bar + margin,
+        (rc.right - 2 * margin).max(1),
+        (rc.bottom - bar - 2 * margin).max(1),
     );
     ctx.view = View::fit(area, ctx.image.width() as i32, ctx.image.height() as i32);
 }

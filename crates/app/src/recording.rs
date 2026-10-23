@@ -11,15 +11,16 @@ use anyhow::{Context, Result};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, SetBkColor, SetTextColor,
-    TextOutW, HGDIOBJ, PAINTSTRUCT,
+    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, SelectObject, SetBkColor,
+    SetTextColor, TextOutW, HGDIOBJ, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, GetWindowLongPtrW, KillTimer,
-    RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, CREATESTRUCTW,
-    GWLP_USERDATA, HMENU, SM_CXSCREEN, SW_SHOWNA, WINDOW_EX_STYLE, WM_COMMAND, WM_NCCREATE,
-    WM_PAINT, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW, KillTimer,
+    RegisterClassW, SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    CREATESTRUCTW, GWLP_USERDATA, HMENU, SW_SHOWNA, WINDOW_EX_STYLE, WM_COMMAND, WM_NCCREATE,
+    WM_PAINT, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WS_VISIBLE,
 };
 
 use crate::dispatch::{self, Action};
@@ -33,6 +34,8 @@ pub struct Recording {
 const CLASS_NAME: PCWSTR = w!("RustShotRecToolbar");
 static REGISTER: Once = Once::new();
 
+/// Window size at 96 DPI, scaled to the monitor's DPI at creation (the toolbar stays where it
+/// was put, so it keeps that DPI and does not handle `WM_DPICHANGED`).
 const WIN_W: i32 = 240;
 const WIN_H: i32 = 56;
 const TIMER_ID: usize = 1;
@@ -42,6 +45,9 @@ const ID_STOP: usize = 202;
 struct ToolbarInner {
     dispatch_hwnd: HWND,
     start: Instant,
+    dpi: u32,
+    /// Label and button font at `dpi`.
+    font: Option<crate::dpi::UiFont>,
 }
 
 /// The toolbar window. Dropping it destroys the window.
@@ -55,26 +61,30 @@ impl Toolbar {
     /// Create and show the toolbar, posting its button actions to `dispatch_hwnd`.
     pub fn show(dispatch_hwnd: HWND) -> Result<Toolbar> {
         ensure_class()?;
+        // Top centre of the monitor the user is working on.
+        let (work, dpi) = crate::dpi::cursor_monitor();
+        let px = |v: i32| crate::dpi::scale(v, dpi);
         let mut inner = Box::new(ToolbarInner {
             dispatch_hwnd,
             start: Instant::now(),
+            dpi,
+            font: crate::dpi::UiFont::new(dpi),
         });
 
         // SAFETY: standard top-most tool-window creation; CREATESTRUCT carries the inner ptr.
         let hwnd = unsafe {
             let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
-            let sw = GetSystemMetrics(SM_CXSCREEN);
-            let x = (sw - WIN_W) / 2;
+            let x = work.left + (work.right - work.left - px(WIN_W)) / 2;
             let ptr: *mut ToolbarInner = &mut *inner;
             CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 CLASS_NAME,
                 w!("RustShot Recording"),
                 WS_POPUP,
-                x.max(0),
-                24,
-                WIN_W,
-                WIN_H,
+                x.max(work.left),
+                work.top + px(24),
+                px(WIN_W),
+                px(WIN_H),
                 None,
                 Some(HMENU(null_mut())),
                 Some(hinstance.into()),
@@ -83,8 +93,9 @@ impl Toolbar {
             .context("creating toolbar window")?
         };
 
-        let pause_btn = create_button(hwnd, ID_PAUSE, w!("Pause"), 92)?;
-        let _stop = create_button(hwnd, ID_STOP, w!("Stop"), 166)?;
+        let font = inner.font.as_ref();
+        let pause_btn = create_button(hwnd, ID_PAUSE, w!("Pause"), 92, dpi, font)?;
+        let _stop = create_button(hwnd, ID_STOP, w!("Stop"), 166, dpi, font)?;
 
         // SAFETY: show without stealing focus and tick the elapsed clock twice a second.
         unsafe {
@@ -119,25 +130,43 @@ impl Drop for Toolbar {
     }
 }
 
-fn create_button(parent: HWND, id: usize, label: PCWSTR, x: i32) -> Result<HWND> {
+/// A push button at `x` (96-DPI pixels), scaled to `dpi` and given `font`.
+fn create_button(
+    parent: HWND,
+    id: usize,
+    label: PCWSTR,
+    x: i32,
+    dpi: u32,
+    font: Option<&crate::dpi::UiFont>,
+) -> Result<HWND> {
+    let px = |v: i32| crate::dpi::scale(v, dpi);
     // SAFETY: standard BUTTON child-window creation.
     unsafe {
         let hinstance = GetModuleHandleW(None).context("GetModuleHandleW")?;
-        CreateWindowExW(
+        let button = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("BUTTON"),
             label,
             WS_CHILD | WS_VISIBLE,
-            x,
-            16,
-            70,
-            26,
+            px(x),
+            px(16),
+            px(70),
+            px(26),
             Some(parent),
             Some(HMENU(id as *mut c_void)),
             Some(hinstance.into()),
             None,
         )
-        .context("creating toolbar button")
+        .context("creating toolbar button")?;
+        if let Some(f) = font {
+            SendMessageW(
+                button,
+                WM_SETFONT,
+                Some(WPARAM(f.0 .0 as usize)),
+                Some(LPARAM(0)),
+            );
+        }
+        Ok(button)
     }
 }
 
@@ -239,17 +268,21 @@ fn paint(hwnd: HWND, inner: &ToolbarInner) {
         let mut ps = PAINTSTRUCT::default();
         let hdc = BeginPaint(hwnd, &mut ps);
         let bg = CreateSolidBrush(COLORREF(0x0014_1210));
-        let rect = RECT {
-            left: 0,
-            top: 0,
-            right: WIN_W,
-            bottom: WIN_H,
-        };
+        let mut rect = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rect);
         FillRect(hdc, &rect, bg);
         let _ = DeleteObject(HGDIOBJ(bg.0));
         SetBkColor(hdc, COLORREF(0x0014_1210));
         SetTextColor(hdc, COLORREF(0x0040_40F0)); // reddish (BGR)
-        let _ = TextOutW(hdc, 12, 18, &wide);
+        let old = inner
+            .font
+            .as_ref()
+            .map(|f| SelectObject(hdc, HGDIOBJ(f.0 .0)));
+        let px = |v: i32| crate::dpi::scale(v, inner.dpi);
+        let _ = TextOutW(hdc, px(12), px(20), &wide);
+        if let Some(o) = old {
+            SelectObject(hdc, o);
+        }
         let _ = EndPaint(hwnd, &ps);
     }
 }
